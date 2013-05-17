@@ -25,6 +25,47 @@ ONE_K = 1024
 
 ENOATTR = 1009  # Python 2 does not provide ENOATTR in errno for some reason
 
+log = open('log','w')
+indent = 0
+indStr = '  '
+
+DEBUG = True
+
+if DEBUG:
+    logging.debug("Starting SizeFS")
+
+
+def logmethod(methodname):
+
+    def _method(self, *argl, **argd):
+        global indent
+        #parse the arguments and create a string representation
+        args = []
+        for item in argl:
+            args.append('%s' % str(item))
+        for key,item in argd.items():
+            args.append('%s=%s' % (key,str(item)))
+        arg_str = ','.join(args)
+        print methodname, arg_str
+        return_val = getattr(self,'_H_%s' % methodname)(*argl,**argd)
+        print methodname, type(return_val)
+        return return_val
+
+    return _method
+
+
+class LogTheMethods(type):
+    def __new__(cls,classname,bases,classdict):
+        logmatch = re.compile(classdict.get('logMatch','.*'))
+
+        for attr,item in classdict.items():
+            if callable(item) and logmatch.match(attr):
+                classdict['_H_%s'%attr] = item    # rebind the method
+                classdict[attr] = logmethod(attr) # replace method by wrapper
+
+        return type.__new__(cls,classname,bases,classdict)
+
+
 class SizeFSFuse(LoggingMixIn, Operations):
     """
      Size Filesystem.
@@ -33,8 +74,10 @@ class SizeFSFuse(LoggingMixIn, Operations):
      Each directory contains a list of commonly useful file sizes, however non-listed files of arbitrary size
      can be opened and read from. The size spec comes from the filename, e.g.
 
-       open("/<folder>/1.1T-1")
+       open("/<folder>/1.1T-1B")
     """
+
+    #__metaclass__ = LogTheMethods
 
     def __init__(self):
         self.folders = {}
@@ -43,7 +86,7 @@ class SizeFSFuse(LoggingMixIn, Operations):
         self.fd = 0
         now = time()
         self.folders['/'] = dict(st_mode=(S_IFDIR | 0444), st_ctime=now,
-                                 st_mtime=now, st_atime=now, st_nlink=2)
+                                 st_mtime=now, st_atime=now, st_nlink=0)
 
         # Create the default dirs (zeros, ones, common)
         self.mkdir('/zeros', (S_IFDIR | 0444))
@@ -58,19 +101,19 @@ class SizeFSFuse(LoggingMixIn, Operations):
         """
          We'll return EPERM error to indicate that the user cannot change the permissions of files/folders
         """
-        return FuseOSError(EPERM)
+        raise FuseOSError(EPERM)
 
     def chown(self, path, uid, gid):
         """
          We'll return EPERM error to indicate that the user cannot change the ownership of files/folders
         """
-        return FuseOSError(EPERM)
+        raise FuseOSError(EPERM)
 
     def create(self, path, mode):
         """
          We'll return EPERM error to indicate that the user cannot create files
         """
-        return FuseOSError(EPERM)
+        raise FuseOSError(EPERM)
 
     def getattr(self, path, fh=None):
         """
@@ -79,20 +122,28 @@ class SizeFSFuse(LoggingMixIn, Operations):
         """
         (folder, filename) = os.path.split(path)
 
-        # Does the folder exist?
-        if not folder in self.folders:
-            return FuseOSError(ENOENT)
+        try:
+            # Does the folder exist?
+            if not folder in self.folders:
+                raise FuseOSError(ENOENT)
 
-        # Does the requested filename match our size spec?
-        if not FILE_REGEX.match(filename):
-            return FuseOSError(ENOENT)
+            # Does the requested filename match our size spec?
+            if not FILE_REGEX.match(filename):
+                raise FuseOSError(ENOENT)
+        except FuseOSError:
+            logging.debug("Request for attributes of non-existent file or folder: %s" % path)
 
         if path in self.folders:
             return self.folders[path]
         else:
-            return dict(st_mode=(S_IFREG | 0444), st_nlink=1,
-                        st_size=0, st_ctime=time(), st_mtime=time(),
-                        st_atime=time())
+            if filename == "." or filename == "..":
+                return dict(st_mode=(S_IFDIR | 0444), st_nlink=1,
+                            st_size=0, st_ctime=time(), st_mtime=time(),
+                            st_atime=time())
+            else:
+                return dict(st_mode=(S_IFREG | 0444), st_nlink=1,
+                            st_size=0, st_ctime=time(), st_mtime=time(),
+                            st_atime=time())
 
     def getxattr(self, path, name, position=0):
         """
@@ -100,12 +151,13 @@ class SizeFSFuse(LoggingMixIn, Operations):
          This is always an ENOATTR error for files, and the only thing that should ever really be used
          for folders is the pattern
         """
-        attrs = self.folders[path].get('attrs', {})
+        folder_meta = self.folders.get(path, {})
+        attrs = folder_meta.get('attrs', {})
 
         if name in attrs:
             return attrs[name]
         else:
-            return FuseOSError(ENOATTR)
+            return ""
 
     def listxattr(self, path):
         """
@@ -134,11 +186,11 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
         # Does the folder exist?
         if not folder in self.folders:
-            return FuseOSError(ENOENT)
+            raise FuseOSError(ENOENT)
 
         # Does the requested filename match our size spec?
         if not FILE_REGEX.match(filename):
-            return FuseOSError(ENOENT)
+            raise FuseOSError(ENOENT)
 
         ## Now do the right thing and open one of the file objects (add it to files)
 
@@ -172,8 +224,9 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     # FIX ME
     def rmdir(self, path):
-        self.files.pop(path)
-        self.files['/']['st_nlink'] -= 1
+        raise FuseOSError(EPERM)
+        #self.files.pop(path)
+        #self.files['/']['st_nlink'] -= 1
 
     def setxattr(self, path, name, value, options, position=0):
         # Ignore options
@@ -181,28 +234,28 @@ class SizeFSFuse(LoggingMixIn, Operations):
             attrs = self.folders[path].setdefault('attrs', {})
             attrs[name] = value
         else:
-            return FuseOSError(EPERM)
+            raise FuseOSError(EPERM)
 
     def statfs(self, path):
         return dict(f_bsize=512, f_blocks=4096, f_bavail=2048)
 
     def symlink(self, target, source):
-        return FuseOSError(EPERM)
+        raise FuseOSError(EPERM)
 
     def truncate(self, path, length, fh=None):
-        return FuseOSError(EPERM)
+        raise FuseOSError(EPERM)
 
     def unlink(self, path):
         if path in self.folders:
             self.folders.pop(path)
         else:
-            return FuseOSError(EPERM)
+            raise FuseOSError(EPERM)
 
     def utimens(self, path, times=None):
         pass
 
     def write(self, path, data, offset, fh):
-        return FuseOSError(EPERM)
+        raise FuseOSError(EPERM)
 
 
 if __name__ == '__main__':
