@@ -20,7 +20,7 @@ class XegerError(Exception):
 #             | <Expression> <Pattern>
 #
 #   <Expression> ::= <Char> [<Multiplier>]
-#                | "(" <Expression> ")" [<Multiplier>]
+#                | "(" <Pattern> ")" [<Multiplier>]
 #                | "[" <Set> "]" [<Multiplier>]
 #
 #   <Multiplier> ::= "*"
@@ -111,35 +111,37 @@ class XegerPattern(AbstractXegerGenerator):
     """
 
     def __init__(self, regex, max_random=128):
-        self.components = self.__parse_xeger__(regex)
-        self.max_random = max_random
-        self.__parse_xeger__(regex)
+        self.__max_random__ = max_random
+        self.__parse_expressions__(regex)
 
     def __parse_expressions__(self, regex):
-        self.expressions = []
+        self.__expressions__ = []
         regex_list = list(regex)
         while regex_list:
-            expression = XegerExpression(regex_list, self.max_random)
-            self.expressions.append(expression)
+            expression = XegerExpression(regex_list, self.__max_random__)
+            self.__expressions__.append(expression)
 
     def generate_prefix(self):
-        prefix = self.expressions[0].generate_complete()
-        self.expressions = self.expressions[1:]
+        prefix = self.__expressions__[0].generate_complete()
+        self.__expressions__ = self.__expressions__[1:]
         return prefix
 
     def generate_suffix(self):
-        suffix = self.expressions[-1].generate_complete()
-        self.expressions = self.expressions[:-1]
+        suffix = self.__expressions__[-1].generate_complete()
+        self.__expressions__ = self.__expressions__[:-1]
         return suffix
+
+    def length(self):
+        return len(self.__expressions__)
 
     def generate(self):
         while True:
-            for expression in self.expressions:
+            for expression in self.__expressions__:
                 yield expression.generate()
 
     def generate_complete(self):
         generated_content = []
-        for expression in self.expressions:
+        for expression in self.__expressions__:
             generated_content.append(expression.generate_complete())
         return "".join(generated_content)
 
@@ -153,8 +155,6 @@ class XegerExpression(AbstractXegerGenerator):
         self.__max_random__ = max_random
         self.__get_generator__(regex_list)
 
-
-    # need to make sure regex isn't "" in the two methods below...
     def __get_generator__(self, regex):
         accum = []
 
@@ -162,54 +162,53 @@ class XegerExpression(AbstractXegerGenerator):
             c = regex.pop(0)
             if c == '(':  # We've reached what appears to be a nested expression
                 if not accum:  # We've not accumulated any content to return
-                    accum = self.__get_nested_expression__(regex)
-                    self.__generator__ = XegerExpression(accum,
-                                                         self.__max_random__)
+                    accum = self.__get_nested_pattern_input__(regex)
+                    self.__generator__ = XegerPattern(accum,
+                                                      self.__max_random__)
                     self.__multiplier__ = XegerMultiplier(regex)
                     self.__is_constant_multiplier__()
-                    break
+                    return
                 else:  # There is info in the accumulator, so it much be chars
                     regex.insert(0, c)
-                    self.__generator__ = XegerChars(accum)
+                    self.__generator__ = XegerSequence(accum)
                     self.__constant_multiplier__ = True
                     self.__multiplier__ = 1
-                    break
+                    return
             elif c == '[':  # We've reached the start of a set
                 if not accum:  # If nothing in accumulator, just process set
-                    accum = self.__get_range__(regex)
-                    self.__generator__ = XegerRange(accum)
+                    self.__generator__ = XegerSet(regex)
                     self.__multiplier__ = XegerMultiplier(regex)
                     self.__is_constant_multiplier__()
-                    break
+                    return
                 else:  # There's already stuff in the accumulator, must be chars
                     regex.insert(0, c)
-                    self.__generator__ = XegerChars(accum)
+                    self.__generator__ = XegerSequence(accum)
                     self.__constant_multiplier__ = True
                     self.__multiplier__ = 1
-                    break
+                    return
             elif c == '\\':  # Escape the next character
                 accum.append(c)
                 c = regex.pop(0)
                 accum.append(c)
             elif c in ['{', '*', '+']:  # We've reached a multiplier
                 if len(accum) == 1:  # just multiply a single character
-                    self.__generator__ = XegerChars(accum)
+                    self.__generator__ = XegerSequence(accum)
                     self.__multiplier__ = XegerMultiplier(regex.insert(0, c))
                     self.__is_constant_multiplier__()
-                    break
+                    return
                 elif len(accum) > 1:  # only multiply the last character
                     last_c = accum[-1]
                     regex.insert(0, c)
                     regex.insert(0, last_c)
-                    self.__generator__ = XegerChars(accum[:-1])
+                    self.__generator__ = XegerSequence(accum[:-1])
                     self.__multiplier__ = XegerMultiplier(regex)
                     self.__is_constant_multiplier__()
-                    break
+                    return
             else:  # just keep collecting boring characters
                 accum.append(c)
 
         if accum:  # If there's anything left in the accumulator, must be chars
-            self.__generator__ = XegerChars(accum)
+            self.__generator__ = XegerSequence(accum)
             self.__constant_multiplier__ = True
             self.__multiplier__ = 1
 
@@ -220,14 +219,14 @@ class XegerExpression(AbstractXegerGenerator):
         else:
             self.__constant_multiplier__ = False
 
-    def __get_nested_expression__(self, regex):
+    def __get_nested_pattern_input__(self, regex):
         accum = []
 
         while regex:
             c = regex.pop(0)
             if c == '(':
                 accum.append('(')
-                accum += self.__get_nested_expression__(regex)
+                accum += self.__get_nested_pattern_input__(regex)
                 accum.append(')')
             elif c == ')':
                 return accum
@@ -267,6 +266,7 @@ class XegerMultiplier(object):
                 if mult:
                     self.random = False
                     self.constant = int("".join(mult))
+                    return
                 else:
                     raise XegerError("Illegal end of multiplier pattern")
             elif c in ['*', '+']:
@@ -278,6 +278,7 @@ class XegerMultiplier(object):
                         self.min_random = 1
                     else:
                         self.min_random = 0
+                    return
             else:
                 if started:
                     try:
@@ -286,16 +287,78 @@ class XegerMultiplier(object):
                     except:
                         raise XegerError("Multipler must be a number")
                 else:
-                    self.random = False
-                    self.constant = 1
+                    break
 
-        raise XegerError("Incomplete multiplier")
+        if started:
+            raise XegerError("Incomplete multiplier")
+        else:
+            self.random = False
+            self.constant = 1
 
     def generate(self):
         if not self.random:
             return self.constant
         else:
             return random.randint(self.min_random, self.max_random)
+
+
+class XegerSequence(AbstractXegerGenerator):
+    """
+    Simple generator, just returns the sequence on each call to generate
+    """
+
+    def __init__(self, list):
+        self.sequence = "".join(list)
+
+    def generate(self):
+        return self.sequence
+
+    def generate_complete(self):
+        return self.sequence
+
+
+class XegerSet(AbstractXegerGenerator):
+    """
+    Set generator, parses an input list for a set and returns a single element
+    on each call to generate (generate_complete is identical)
+    """
+
+    def __init__(self, regex):
+        self.__parse_set__(regex)
+
+    def __parse_set__(self, regex):
+        select_list = []
+        ch1 = ''
+
+        while regex:
+            c = regex.pop(0)
+            if c == ']':
+                if not ch1 == '':
+                    select_list.append(ch1)
+                    self.__set__ = select_list
+                    return
+                else:
+                    raise XegerError("Error in set description")
+            elif c == '-':
+                if ch1 == '':
+                    raise XegerError("Error in set description")
+                elif len(regex) == 0:
+                    raise XegerError("Incomplete set description")
+                else:
+                    ch2 = regex.pop(0)
+                    set_extras = self.__char_range__(ch1, ch2)
+                    for extra in set_extras:
+                        select_list.append(extra)
+                    ch1 = ''
+            else:
+                ch1 = c
+
+        # The range was incomplete because we never reached the closing brace
+        raise XegerError("Incomplete set description")
+
+    def __char_range__(self, a, b):
+        for c in xrange(ord(a), ord(b) + 1):
+            yield chr(c)
 
 #
 #elif c == ')':
