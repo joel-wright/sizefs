@@ -21,8 +21,8 @@ There are a few caveats to bear in mind for use:
 
 Good example Regexs:
 
-    ^starting_header[a-zA-Z0-9]*ending_footer$
-    (([a-z]*)middle([0-9]+)+
+    ^starting_header[a-zA-Z0-9]*ending_footer$  -- header & footer, random contents
+    (([a-z]*)middle([0-9]+)+  -- whole pattern repeats (but may be truncated)
 
 Bad examples:
 
