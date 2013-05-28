@@ -19,6 +19,16 @@ There are a few caveats to bear in mind for use:
    requested file size is reached, or truncated in favour of a fixed file
    'footer'.
 
+Good example Regexs:
+
+    ^starting_header[a-zA-Z0-9]*ending_footer$
+    (([a-z]*)middle([0-9]+)+
+
+Bad examples:
+
+    ^content$  -- fixed size
+    ^start(middle1)+(middle2)+(middle3)+end$  -- only final pattern repeated
+
 Example Usage
 -------------
 
