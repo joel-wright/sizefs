@@ -1,5 +1,4 @@
 import random
-import itertools
 import logging
 
 
@@ -30,7 +29,7 @@ class XegerError(Exception):
 #   <Set> ::= <Char>
 #           | <Char> "-" <Char>
 #           | <Set> <Set>
-
+#
 class XegerGen(object):
     """
     Generate regex content through the read method defined by a given pattern.
@@ -58,15 +57,7 @@ class XegerGen(object):
         return ""
 
 
-class AbstractXegerGenerator(object):
-    def generate(self):
-        raise NotImplementedError
-
-    def generate_complete(self):
-        raise NotImplementedError
-
-
-class Xeger(AbstractXegerGenerator):
+class Xeger(object):
     """
     Parses a given regex pattern and yields content on demand.
 
@@ -108,7 +99,7 @@ class Xeger(AbstractXegerGenerator):
         return "".join(generated_content)
 
 
-class XegerPattern(AbstractXegerGenerator):
+class XegerPattern(object):
     """
     Parses a given pattern into a list of XegerExpressions
 
@@ -152,7 +143,7 @@ class XegerPattern(AbstractXegerGenerator):
         return "".join(generated_content)
 
 
-class XegerExpression(AbstractXegerGenerator):
+class XegerExpression(object):
     """
     Parses an Expression from a list of input characters
     """
@@ -308,7 +299,7 @@ class XegerMultiplier(object):
             return random.randint(self.min_random, self.max_random)
 
 
-class XegerSequence(AbstractXegerGenerator):
+class XegerSequence(object):
     """
     Simple generator, just returns the sequence on each call to generate
     """
@@ -323,7 +314,7 @@ class XegerSequence(AbstractXegerGenerator):
         return self.sequence
 
 
-class XegerSet(AbstractXegerGenerator):
+class XegerSet(object):
     """
     Set generator, parses an input list for a set and returns a single element
     on each call to generate (generate_complete is identical)
