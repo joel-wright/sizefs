@@ -49,6 +49,12 @@ class XegerGen(object):
         self.suffix = self.xeger.suffix
 
     def __read__(self, start, end):
+        # Need to sort out a read strategy
+        # The pattern should repeat if possible (i.e. *,+)
+        # Should only run through the input list once...
+        # Dumb regexs are just that... dumb
+        # Special case in which a */+ is the last in a sequence
+        #  - will be repeated over and over
         return ""
 
 
@@ -360,10 +366,3 @@ class XegerSet(AbstractXegerGenerator):
         for c in xrange(ord(a), ord(b) + 1):
             yield chr(c)
 
-#
-#elif c == ')':
-            #    mult = self.__get_multiplier__(regex)
-            #    return XegerChars(accum), mult
-#elif c == ']':
-            #    mult = self.__get_multiplier__(regex)
-            #    return XegerExpression(accum, mult)
