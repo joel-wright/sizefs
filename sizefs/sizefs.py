@@ -1,453 +1,313 @@
 #!/usr/bin/env python
-"""
-SizeFS
-===========
 
-A mock Filesystem that exists in memory only. Returns files of a size as
-specified by the filename
+import logging
 
-For example, reading a file named 128Mb+1 will return a file of 128 Megabytes
-plus 1 byte, reading a file named 128Mb-1 will return a file of 128 Megabytes
-minus 1 byte
+from collections import defaultdict
+from errno import ENOENT, EPERM, EEXIST
+from stat import S_IFDIR, S_IFLNK, S_IFREG
+from sys import argv, exit
+from time import time
 
->>> sfs = SizeFS()
->>> print len(sfs.open('1B').read())
-1
->>> print len(sfs.open('2B').read())
-2
->>> print len(sfs.open('1KB').read())
-1024
->>> print len(sfs.open('128KB').read())
-131072
-
-The folder structure can also be used to determine the content of the files
-
->>> print sfs.open('zeros/5B').read(5)
-00000
-
->>> print sfs.open('ones/128KB').read(5)
-11111
-
-File content can also be random
-
->>> print len(sfs.open('random/128KB').read())
-131072
->>> print len(sfs.open('random/128KB-1').read())
-131071
->>> print len(sfs.open('random/128KB+1').read())
-131073
-
-File content for common file size limits
-
->>> print sfs.listdir('common')
-[u'100MB-1', u'4GB+1', u'100MB+1', u'4GB-1', u'2GB-1', u'2GB+1']
-
-"""
-
-
-__author__ = 'mm'
-
-import datetime
 import re
 import os
-import stat
 from contents import Filler
-from fs.path import iteratepath, pathsplit, normpath
-from fs.base import FS, synchronize
-from fs.errors import ResourceNotFoundError, ResourceInvalidError
-FILE_REGEX = re.compile("(?P<size>[0-9]*)(?P<si>[TGMK])*"
-                        "(?P<unit>[bB]?)(?P<operator>[\+|\-]?)"
-                        "(?P<shift>\d*)")
-ONE_K = 1024
+
+from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
+
+FILE_REGEX = re.compile("^(?P<size>[0-9]+(\.[0-9])?)(?P<size_si>[EPTGMKB])"
+                        "((?P<operator>[\+|\-])(?P<shift>\d+)"
+                        "(?P<shift_si>[EPTGMKB]))?$")
+
+DEBUG = True
+
+if DEBUG:
+    logging.debug("Starting SizeFS")
 
 
-def __get_shift__(match):
+class SizeFSFuse(LoggingMixIn, Operations):
     """
-    Parses the shift part of a filename e.g. +128, -110
-    """
-    shift = 0
-    keys = match.groupdict().keys()
-    if "operator" in keys and "shift" in keys:
-        operator = match.group('operator')
-        shift_str = match.group('shift')
-        if operator != '' and shift_str != '':
-            shift = int(shift_str)
-            if operator == "-":
-                shift = -shift
-    return shift
+     Size Filesystem.
 
+     Allows 1 level of folders to be created that have an xattr describing how
+     files should be filled (regex). Each directory contains a list of commonly
+     useful file sizes, however non-listed files of arbitrary size can be opened
+     and read from. The size spec comes from the filename, e.g.
 
-def __get_size__(filename):
-    """
-    Parses the filename to get the size of a file
-    e.g. 128Mb+12, 110Mb-10b
-    """
-    match = FILE_REGEX.search(filename)
-    if match:
-        size_str = match.group('size')
-        si_unit = match.group('si')
-        unit = match.group('unit')
-        shift = __get_shift__(match)
-        div = 1
-        if unit == 'b':
-            div = 8
-        elif unit == 'B' or not unit:
-            div = 1
-        else:
-            raise ValueError
-        if not si_unit:
-            mul = 1
-        elif si_unit == 'K':
-            mul = ONE_K
-        elif si_unit == 'M':
-            mul = pow(ONE_K, 2)
-        elif si_unit == 'G':
-            mul = pow(ONE_K, 3)
-        elif si_unit == 'T':
-            mul = pow(ONE_K, 4)
-        else:
-            raise ValueError
-        size = int(size_str)
-        size_in_bytes = (size * mul / div) + shift
-        return size_in_bytes
-    else:
-        return 0
-
-
-class SizeFile(object):
-    """
-    A mock file object that returns a specified number of bytes
+       open("/<folder>/1.1T-1B")
     """
 
-    def __init__(self, path, size, filler=Filler(pattern="0")):
-        self.closed = False
-        self.length = size
-        self.pos = 0
-        self.filler = filler
-        self.path = path
+    #__metaclass__ = LogTheMethods
+    default_files = ['4M', '4M-1B', '4M+1B']
+    sizes = {'B': 1, 'K': 1024, 'M': 1024**2, 'G': 1024**3,
+             'T': 1024**4, 'P': 1024**5, 'E': 1024**6}
 
-    def close(self):
-        """ close the file to prevent further reading """
-        self.closed = True
 
-    def read(self, size=None):
-        """ read size from the file, or if size is None read to end """
-        if self.pos >= self.length or self.closed:
-            return ''
-        if size is None:
-            toread = self.length - self.pos
-            if toread > 0:
-                return self.filler.fill(toread)
-            else:
-                return ''
-        else:
-            if size + self.pos >= self.length:
-                toread = self.length - self.pos
-                self.pos = self.length
-                return self.filler.fill(toread)
-            else:
-                toread = size
-                self.pos = self.pos + size
-                return self.filler.fill(toread)
+    def __init__(self):
+        self.folders = {}
+        self.files = {}
+        self.data = defaultdict(bytes)
+        self.fd = 0
+        now = time()
+        self.folders['/'] = dict(st_mode=(S_IFDIR | 0664), st_ctime=now,
+                                 st_mtime=now, st_atime=now, st_nlink=0)
 
-    def seek(self, offset):
-        """ seek the position by a distance of 'offset' bytes
+        # Create the default dirs (zeros, ones, common)
+        self.mkdir('/zeros', (S_IFDIR | 0664))
+        self.setxattr('/zeros', "pattern", "0", None)
+        self.mkdir('/ones', (S_IFDIR | 0664))
+        self.setxattr('/ones', "pattern", "1", None)
+        self.mkdir('/alpha_num', (S_IFDIR | 0664))
+        self.setxattr('/alpha_num', "pattern", "[a-z,A-Z,0-9]", None)
+
+
+    def chmod(self, path, mode):
         """
-        self.pos = self.pos + offset
+         We'll return EPERM error to indicate that the user cannot change the
+         permissions of files/folders
+        """
+        raise FuseOSError(EPERM)
 
-    def tell(self):
-        """ return how much of the file is left to read """
-        return self.pos
+    def chown(self, path, uid, gid):
+        """
+         We'll return EPERM error to indicate that the user cannot change the
+         ownership of files/folders
+        """
+        raise FuseOSError(EPERM)
 
-    def flush(self):
+    def create(self, path, mode):
+        """
+         We'll return EPERM error to indicate that the user cannot create files
+         anywhere but within folders created to serve regex filled files, and
+         only with valid filenames
+        """
+        (folder, filename) = os.path.split(path)
+
+        if folder in self.folders and not folder == "/":
+            if FILE_REGEX.match(filename):
+                self.files[path] = "Create a generator for it"
+            else:
+                raise FuseOSError(EPERM)
+        else:
+            raise FuseOSError(EPERM)
+
+    def cread(self, path, size, offset, fh):
+        """
+         For code use only - creates a file and allows it to be read
+         combined create and read **for programmatic use - ignored by fuse**
+        """
+        if path in self.files:
+            self.read(path, size, offset, fh)
+        else:
+            self.create(path, 0664)
+            self.read(path, size, offset, fh)
+
+    def getattr(self, path, fh=None):
+        """
+         Getattr either returns an attribute dict for a folder from the
+         self.folders map, or it returns a standard attribute dict for any valid
+         files
+        """
+        (folder, filename) = os.path.split(path)
+
+        if not folder in self.folders:
+            raise FuseOSError(ENOENT)
+
+        if path in self.folders:
+            return self.folders[path]
+        else:
+            if filename == "." or filename == "..":
+                return dict(st_mode=(S_IFDIR | 0444), st_nlink=1,
+                            st_size=0, st_ctime=time(), st_mtime=time(),
+                            st_atime=time())
+            else:
+                if folder == "/":
+                    raise FuseOSError(ENOENT)
+                else:
+                    m = FILE_REGEX.match(filename)
+                    if m:
+                        return self.__file_attrs__(m)
+                    else:
+                        raise FuseOSError(ENOENT)
+
+    def getxattr(self, path, name, position=0):
+        """
+         Returns an extended attribute of a file/folder
+         This is always an ENOATTR error for files, and the only thing that
+         should ever really be used for folders is the pattern
+        """
+        folder_meta = self.folders.get(path, {})
+        attrs = folder_meta.get('attrs', {})
+
+        if name in attrs:
+            return attrs[name]
+        else:
+            return " "
+
+    def listxattr(self, path):
+        """
+         Return a list of all extended attribute names for a folder
+         (always empty for files)
+        """
+        folder_meta = self.folders.get(path, {})
+        attrs = folder_meta.get('attrs', {})
+        return attrs.keys()
+
+    def mkdir(self, path, mode):
+        """
+         Here we ignore the mode because we only allow 0444 directories to be
+         created
+        """
+        (parent, folder) = os.path.split(path)
+
+        if not parent == "/":
+            raise FuseOSError(EPERM)
+
+        self.folders[path] = dict(st_mode=(S_IFDIR | 0664), st_nlink=2,
+                                  st_size=0, st_ctime=time(), st_mtime=time(),
+                                  st_atime=time())
+
+        # Set the default pattern for a folder to "0" so that all new folders
+        # default to filling files with zeros
+        self.setxattr(path, "pattern", "0", None)
+        self.folders['/']['st_nlink'] += 1
+
+        # Add default files
+        for default_file in self.default_files:
+            attr = self.__file_attrs__(FILE_REGEX.match(default_file))
+            new_filepath = os.path.join(path, default_file)
+            self.files.setdefault(new_filepath, {"attrs": attr})
+
+    def mkdir_regex(self, path, regex):
+        """
+         Only for programmatic use, never called by FUSE
+        """
+        if path in self.folders:
+            raise FuseOSError(EEXIST)
+        else:
+            self.mkdir(path, 0644)
+            self.setxattr(path, "pattern", regex, None)
+
+    def open(self, path, flags):
+        """
+         We check that a file conforms to a size spec and is from a requested
+         folder
+        """
+        (folder, filename) = os.path.split(path)
+
+        # Does the folder exist?
+        if not folder in self.folders:
+            raise FuseOSError(ENOENT)
+
+        # Does the requested filename match our size spec?
+        if not FILE_REGEX.match(filename):
+            raise FuseOSError(ENOENT)
+
+        # Now do the right thing and open one of the file objects
+        # (add it to files)
+
+        self.fd += 1
+        return self.fd
+
+    # FIX ME!!! - need to read from, and keep track of position in, generator
+    def read(self, path, size, offset, fh):
+        """
+         Returns content based on the pattern of the containing folder
+        """
+        return "Hello, World!"[offset:size+offset]
+
+    def readdir(self, path, fh):
+        folder_names = ['.', '..']
+
+        if path == "/":
+            for folder_path in self.folders:
+                if not folder_path == "/":
+                    (parent, folder_name) = os.path.split(folder_path)
+                    if parent == path:
+                        folder_names.append(folder_name)
+        else:
+            folder_names += self.default_files
+
+        return folder_names
+
+    def readlink(self, path):
+        return self.data[path]
+
+    def removexattr(self, path, name):
+        attrs = self.folders[path].get('attrs', {})
+
+        if name in attrs:
+            del attrs[name]
+
+    def rename(self, old, new):
+        self.folders[new] = self.folders.pop(old)
+
+
+    # FIX ME
+    def rmdir(self, path):
+        raise FuseOSError(EPERM)
+        #self.files.pop(path)
+        #self.files['/']['st_nlink'] -= 1
+
+    def setxattr(self, path, name, value, options, position=0):
+        # Ignore options
+        if path in self.folders:
+            attrs = self.folders[path].setdefault('attrs', {})
+            attrs[name] = value
+        else:
+            raise FuseOSError(EPERM)
+
+    def statfs(self, path):
+        return dict(f_bsize=512, f_blocks=4096, f_bavail=2048)
+
+    def symlink(self, target, source):
+        raise FuseOSError(EPERM)
+
+    def truncate(self, path, length, fh=None):
+        raise FuseOSError(EPERM)
+
+    def unlink(self, path):
+        if path in self.folders:
+            self.folders.pop(path)
+        else:
+            raise FuseOSError(EPERM)
+
+    def utimens(self, path, times=None):
         pass
 
-class DirEntry(object):  # pylint: disable=R0902
-    """
-    A directory entry. Can be a file or folder.
-    """
+    def write(self, path, data, offset, fh):
+        raise FuseOSError(EPERM)
 
-    def __init__(self, dir_type, name, contents=None,
-                 filler=Filler(pattern="0")):
+    def __calculate_file_size__(self, regex_match):
+        file_groupdict = regex_match.groupdict()
+        init_size = int(file_groupdict["size"])
+        size_unit = self.sizes[file_groupdict["size_si"]]
+        size = init_size * size_unit
 
-        assert dir_type in ("dir", "file"), "Type must be dir or file!"
+        operator = file_groupdict["operator"]
+        if operator is not None:
+            shift = file_groupdict["shift"]
+            shift_unit = self.sizes[file_groupdict["shift_si"]]
+            shift_size = int(shift) * shift_unit
+            if operator == "-":
+                shift_size = -shift_size
+            size += shift_size
 
-        self.type = dir_type
-        self.name = name
-
-        if contents is None and dir_type == "dir":
-            contents = {}
-
-        self.filler = filler
-        self.contents = contents
-        self.mem_file = None
-        self.created_time = datetime.datetime.now()
-        self.modified_time = self.created_time
-        self.accessed_time = self.created_time
-
-        if self.type == 'file':
-            self.mem_file = SizeFile(name, __get_size__(name), filler=filler)
-
-    def desc_contents(self):
-        """ describes the contents of this DirEntry """
-        if self.isfile():
-            return "<file %s>" % self.name
-        elif self.isdir():
-            return "<dir %s>" % "".join(
-                "%s: %s" % (k, v.desc_contents())
-                for k, v in self.contents.iteritems())
-
-    def isdir(self):
-        """ is this DirEntry a directory """
-        return self.type == "dir"
-
-    def isfile(self):
-        """ is this DirEntry a file """
-        return self.type == "file"
-
-    def __str__(self):
-        return "%s:" % (self.name)#, self.desc_contents())
-
-
-log = open('log','w')
-indent = 0
-indStr = '  '
-
-
-def logmethod(methodname):
-
-    def _method(self, *argl, **argd):
-        global indent
-        #parse the arguments and create a string representation
-        args = []
-        for item in argl:
-            args.append('%s' % str(item))
-        for key,item in argd.items():
-            args.append('%s=%s' % (key,str(item)))
-        arg_str = ','.join(args)
-        print methodname, arg_str
-        return_val = getattr(self,'_H_%s' % methodname)(*argl,**argd)
-        print methodname, type(return_val)
-        return return_val
-
-    return _method
-
-
-class LogTheMethods(type):
-    def __new__(cls,classname,bases,classdict):
-        logmatch = re.compile(classdict.get('logMatch','.*'))
-
-        for attr,item in classdict.items():
-            if callable(item) and logmatch.match(attr):
-                classdict['_H_%s'%attr] = item    # rebind the method
-                classdict[attr] = logmethod(attr) # replace method by wrapper
-
-        return type.__new__(cls,classname,bases,classdict)
-
-
-class SizeFS(FS):  # pylint: disable=R0902,R0904,R0921
-    """
-    A mock file system that returns files of specified sizes and content
-    """
-
-    __metaclass__ = LogTheMethods
-    logMatch = '.*'
-
-    def __init__(self, *args, **kwargs):
-        self.verbose = kwargs.pop("verbose", False)
-        super(SizeFS, self).__init__(*args, **kwargs)
-        #thread_synchronize=_thread_synchronize_default)
-        self.sizes = [1, 10, 100]
-        self.si_units = ['K', 'M', 'G']
-        self.units = ["B", "b"]
-        files = ["%s%s%s" % (size, si, unit)
-                 for size in self.sizes
-                 for si in self.si_units
-                 for unit in self.units]
-        self.root = DirEntry('dir', 'root')
-
-        self.zeros = DirEntry('dir', 'zeros', filler=Filler(pattern="0"))
-        self.ones = DirEntry('dir', 'ones', filler=Filler(pattern="1"))
-        self.random = DirEntry('dir', 'random',
-                               filler=Filler(regenerate=True,
-                                             pattern="[a-z,A-Z,0-9]",
-                                             max_random=128))
-        self.common = DirEntry('dir', 'common',
-                               filler=Filler(regenerate=True,
-                                             pattern="[a-z,A-Z,0-9]",
-                                             max_random=128))
-
-        for filename in files:
-            self.zeros.contents[filename] = DirEntry(
-                'file', filename, filler=Filler(pattern="0"))
-            self.ones.contents[filename] = DirEntry(
-                'file', filename, filler=Filler(pattern="1"))
-            self.random.contents[filename] = DirEntry(
-                'file', filename,
-                filler=Filler(regenerate=True, pattern="[a-z,A-Z,0-9]",
-                              max_random=128))
-
-        # Create a list of common file size limits
-        common_sizes = [
-            '100MB',  # PHP default
-            '2GB',  # signed int
-            '4GB',  # unsigned int
-        ]
-
-        for filename in common_sizes:
-            # Take the base file size limit and plus/minus 1 byte
-            plus_one = "%s+1" % filename
-            minus_one = "%s-1" % filename
-            self.common.contents[plus_one] = DirEntry(
-                'file', plus_one,
-                filler=Filler(regenerate=True, pattern="[a-z,A-Z,0-9]",
-                              max_random=128))
-            self.common.contents[minus_one] = DirEntry(
-                'file', minus_one,
-                filler=Filler(regenerate=True, pattern="[a-z,A-Z,0-9]",
-                              max_random=128))
-
-        self.root.contents['zeros'] = self.zeros
-        self.root.contents['ones'] = self.ones
-        self.root.contents['random'] = self.random
-        self.root.contents['common'] = self.common
-
-    def _get_dir_entry(self, dir_path):
-        """
-        Returns a DirEntry for a specified path 'dir_path'
-        """
-        dir_path = normpath(dir_path)
-        current_dir = self.root
-        for path_component in iteratepath(dir_path):
-            if current_dir.contents is None:
-                return self.zeros.contents.get(path_component, None)
-            dir_entry = current_dir.contents.get(path_component, None)
-            if dir_entry is None:
-                return self.zeros.contents.get(path_component, None)
-            current_dir = dir_entry
-        return current_dir
-
-    def isdir(self, path):
-        path = normpath(path)
-        if path in ('', '/'):
-            return True
-        dir_item = self._get_dir_entry(path)
-        if dir_item is None:
-            return False
-        return dir_item.isdir()
-
-    def add_regex_dir(self, name, regex, max_random=128, regenerate=True):
-        _dir = DirEntry('dir', name,
-                       filler=Filler(regenerate=regenerate, pattern=regex,
-                                     max_random=max_random))
-        self.root.contents[name] = _dir
-
-    @synchronize
-    def isfile(self, path):
-        path = normpath(path)
-        if path in ('', '/'):
-            return False
-        dir_item = self._get_dir_entry(path)
-        if dir_item is None:
-            return False
-        return dir_item.isfile()
-
-    @synchronize
-    def makedir(self, dirname, recursive=False, allow_recreate=False):
-        raise NotImplementedError
-
-    @synchronize
-    def remove(self, path):
-        raise NotImplementedError
-
-    @synchronize
-    def removedir(self, path, recursive=False, force=False):
-        raise NotImplementedError
-
-    @synchronize
-    def rename(self, src, dst):
-        raise NotImplementedError
-
-    @synchronize
-    def listdir(self, path="/", wildcard=None,  # pylint: disable=R0913
-                full=False, absolute=False,
-                dirs_only=False, files_only=False):
-        dir_entry = self._get_dir_entry(path)
-        if dir_entry is None:
-            raise ResourceNotFoundError(path)
-        if dir_entry.isfile():
-            raise ResourceInvalidError(path, msg="not a directory: %(path)s")
-        paths = dir_entry.contents.keys()
-        for (i, _path) in enumerate(paths):
-            if not isinstance(_path, unicode):
-                paths[i] = unicode(_path)
-        p_dirs = self._listdir_helper(path, paths, wildcard, full,
-                                      absolute, dirs_only, files_only)
-        return p_dirs
-
-    @synchronize
-    def getinfo(self, path):
-        dir_entry = self._get_dir_entry(path)
-
-        if dir_entry is None:
-            info = {}
-            info['st_mode'] = 0666 | stat.S_IFREG
-            fname = os.path.basename(path)
-            try:
-                info['size'] = __get_size__(fname)
-                now = datetime.datetime.now()
-                info['created_time'] = now
-                info['modified_time'] = now
-                info['accessed_time'] = now
-                return info
-            except ValueError:
-                return None
-
-        info = {}
-        info['created_time'] = dir_entry.created_time
-        info['modified_time'] = dir_entry.modified_time
-        info['accessed_time'] = dir_entry.accessed_time
-
-        if dir_entry.isdir():
-            info['size'] = 4096
-            info['st_nlink'] = 0
-            info['st_mode'] = 0755 | stat.S_IFDIR
+        if size < 0:
+            return 0
         else:
-            info['size'] = dir_entry.mem_file.length
-            info['st_mode'] = 0666 | stat.S_IFREG
+            return int(size)
 
-        return info
-
-    @synchronize
-    def open(self, path, mode="r", **kwargs):
-        """
-
-        """
-        path = normpath(path)
-        file_path, file_name = pathsplit(path)
-        parent_dir_entry = self._get_dir_entry(file_path)
-
-        if parent_dir_entry is None or not parent_dir_entry.isdir():
-            raise ResourceNotFoundError(path)
-
-        if 'r' in mode:
-
-            if file_name in parent_dir_entry.contents:
-                file_dir_entry = parent_dir_entry.contents[file_name]
-                if file_dir_entry.isdir():
-                    raise ResourceInvalidError(path)
-                file_dir_entry.accessed_time = datetime.datetime.now()
-                return file_dir_entry.mem_file
-            else:
-                size = __get_size__(file_name)
-                mem_file = SizeFile(path, size, filler=parent_dir_entry.filler)
-                return mem_file
-
-        elif 'w' in mode or 'a' in mode:
-            raise NotImplementedError
+    def __file_attrs__(self, m):
+        size = self.__calculate_file_size__(m)
+        return dict(st_mode=(S_IFREG | 0444), st_nlink=1,
+                    st_size=size, st_ctime=time(),
+                    st_mtime=time(), st_atime=time())
 
 
-if __name__ == "__main__":
-    import doctest
+if __name__ == '__main__':
+    if len(argv) != 2:
+        print('usage: %s <mountpoint>' % argv[0])
+        exit(1)
 
-    doctest.testmod()
+    logging.getLogger().setLevel(logging.DEBUG)
+    fuse = FUSE(SizeFSFuse(), argv[1], foreground=True)
