@@ -43,17 +43,38 @@ class XegerGen(object):
         self.size = size
         self.max_random = max_random
         self.index = 0
-        self.xeger = Xeger(regex, self.max_random)
+        self.xeger = Xeger(regex, size, self.max_random)
         self.prefix = self.xeger.prefix
         self.suffix = self.xeger.suffix
 
     def __read__(self, start, end):
-        # Need to sort out a read strategy
-        # The pattern should repeat if possible (i.e. *,+)
-        # Should only run through the input list once...
-        # Dumb regexs are just that... dumb
-        # Special case in which a */+ is the last in a sequence
-        #  - will be repeated over and over
+        """
+        Need to sort out a read strategy
+
+        The pattern should repeat if possible (i.e. *,+)
+        Should only run through the input list once...
+
+        Dumb regexs are just that... dumb
+
+        Current plan is to remove max_random and do a quick "top level" search
+        for which patterns repeat, and decide in advance an appropriate
+        percentage of the file size...
+
+        we need to find the repeating patterns, then have fuzzy boundaries
+
+        e.g.
+        (middle1)+(middle2)+(middle3)+
+
+        pick 3 points in the file
+        p1 = random(0-100)
+        p2 = random(p1-100)
+        p3 = as close to the end as any fixed points will let us get...
+
+        when generating the repeaters make sure we cross the boundaries
+
+        obviously this has it's own problems, but it's mainly to do with
+        generating the right number of bytes...
+        """
         return ""
 
 
@@ -66,8 +87,9 @@ class Xeger(object):
     from the file generated (to support metadata checking)
     """
 
-    def __init__(self, regex, max_random=128):
+    def __init__(self, regex, size, max_random=128):
         self.max_random = max_random
+        self.__size__ = size
         self.__parse_pattern__(regex)
 
     def __parse_pattern__(self, regex):
@@ -119,22 +141,27 @@ class XegerPattern(object):
             self.__expressions__.append(expression)
 
     def generate_prefix(self):
-        prefix = self.__expressions__[0].generate_complete()
-        self.__expressions__ = self.__expressions__[1:]
-        return prefix
+        if self.length() > 0:
+            prefix = self.__expressions__[0].generate_complete()
+            self.__expressions__ = self.__expressions__[1:]
+            return prefix
+        else:
+            return ""
 
     def generate_suffix(self):
-        suffix = self.__expressions__[-1].generate_complete()
-        self.__expressions__ = self.__expressions__[:-1]
-        return suffix
+        if self.length() > 0:
+            suffix = self.__expressions__[-1].generate_complete()
+            self.__expressions__ = self.__expressions__[:-1]
+            return suffix
+        else:
+            return ""
 
     def length(self):
         return len(self.__expressions__)
 
     def generate(self):
-        while True:
-            for expression in self.__expressions__:
-                yield expression.generate()
+        for expression in self.__expressions__:
+            yield expression.generate()
 
     def generate_complete(self):
         generated_content = []
