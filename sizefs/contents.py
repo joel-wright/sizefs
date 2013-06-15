@@ -2,6 +2,34 @@ import random
 import logging
 
 
+class FastRandom(object):
+    """
+    random itself is too slow for our purposes, so we use random to populate
+    a small list of randomly generated numbers that can be used in each call
+    to randint()
+
+    A call to randint() just returns the a number from our list and increments
+    the list index.
+
+    This is faster and good enough for a "random" filler
+    """
+
+    def __init__(self):
+        # Generate a small list of random numbers
+        randoms = []
+        self.index = 0
+        self.final_index = len(randoms) - 1
+        self.randoms = randoms
+
+    def randint(self):
+        value = self.randoms[self.index]
+        if self.index < self.final_index:
+            self.index += 1
+        else:
+            self.index = 0
+        return value
+
+
 class XegerError(Exception):
 
     def __init__(self, value):
