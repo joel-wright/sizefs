@@ -10,7 +10,7 @@ from time import time
 
 import re
 import os
-from contents import Filler
+from contents import XegerGen
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
 

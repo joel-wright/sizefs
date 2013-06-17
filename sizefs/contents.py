@@ -14,16 +14,15 @@ class FastRandom(object):
     This is faster and good enough for a "random" filler
     """
 
-    def __init__(self):
+    def __init__(self, min, max, len=255):
         # Generate a small list of random numbers
-        randoms = []
+        self.randoms = [random.randint(min, max) for i in range(len)]
         self.index = 0
-        self.final_index = len(randoms) - 1
-        self.randoms = randoms
+        self.len = len
 
-    def randint(self):
+    def rand(self):
         value = self.randoms[self.index]
-        if self.index < self.final_index:
+        if self.index < self.len - 1:
             self.index += 1
         else:
             self.index = 0
@@ -41,7 +40,7 @@ class XegerError(Exception):
 
 # BNF for acceptable Regex:
 #
-#   <Regex> ::= ["^"] <Pattern> ["$"]
+#   <Regex> ::= <Pattern>
 #
 #   <Pattern> ::= <Expression>
 #             | <Expression> <Pattern>
@@ -52,6 +51,7 @@ class XegerError(Exception):
 #
 #   <Multiplier> ::= "*"
 #                | "+"
+#                | "?"
 #                | '{' <Num> '}'
 #
 #   <Set> ::= <Char>
@@ -60,50 +60,142 @@ class XegerError(Exception):
 #
 class XegerGen(object):
     """
-    Generate regex content through the read method defined by a given pattern.
+    The generator uses up to 4 regular expressions to generate the contents
+    of a file defined below:
 
-    Only fully supports sequential reading, however, any read within any
-    specified start or end range will produce an appropriate output (this is
-    necessary for metadata testing functions.
+     - prefix: fixed start to the file
+               defaults to ""
+     - suffix: fixed end to the file
+               defaults to ""
+     - filler: the repeating body of the file (the body of the file always
+               amounts to (filler)*
+               defaults to 0*
+     - padder: if a complex filler pattern generated does not fit within
+               the remaining space left in the generated file, padding
+               is used to fill the remaining space. This should always be
+               as simple as possible (preferably generating individial
+               characters).
+               defaults to 0*
+
+    The file will be generated as follows:
+
+    (prefix)(filler)*(padder)*(suffix)
+
+    The generator will always produce a string containing the prefix and
+    suffix if a string of sufficient size is requested. Following that, the
+    generator will fill the remaining space with filler, either ending there
+    or filling remaining space using the padder pattern. The padder pattern
+    will only be used if a complete filler pattern will not fit in the space
+    remaining.
+
+    max_random is used to define the largest random repeat factor of any
+    + or * operators.
+
+    Random seeks within a file may produce inconsistent results for general
+    file contents, however prefix and suffix will always be consistent with
+    the requested pattern.
     """
 
-    def __init__(self, regex, size, max_random=128):
+    def __init__(self, size, filler=None, prefix=None,
+                 suffix=None, padder=None, max_random=128):
         self.size = size
-        self.max_random = max_random
-        self.index = 0
-        self.xeger = Xeger(regex, size, self.max_random)
-        self.prefix = self.xeger.prefix
-        self.suffix = self.xeger.suffix
+        self.random = FastRandom(max_random)
+        self.logger = logging.getLogger(__name__)
+
+        if filler is not None:
+            self.filler = Xeger(filler, self.random)
+        else:
+            self.filler = Xeger("0", self.random)
+
+        if padder is not None:
+            self.padder = Xeger(padder, self.random)
+        else:
+            self.padder = Xeger("0", self.random)
+
+        if prefix is not None:
+            self.prefix = Xeger(prefix, self.random).generate_complete()
+            self.prefix_length = len(self.prefix)
+        else:
+            self.prefix = ""
+            self.prefix_length = 0
+
+        if suffix is not None:
+            self.suffix = Xeger(suffix, self.random).generate_complete()
+            self.suffix_length = len(self.suffix)
+        else:
+            self.suffix = ""
+            self.suffix_length = 0
+
+        if size < (self.prefix_length + self.suffix_length):
+            self.logger.error("Prefix and suffix combination is longer than"
+                              "the requested size of the file. One or both will"
+                              "be truncated")
 
     def __read__(self, start, end):
         """
-        Need to sort out a read strategy
+        Return regex content.
 
-        The pattern should repeat if possible (i.e. *,+)
-        Should only run through the input list once...
-
-        Dumb regexs are just that... dumb
-
-        Current plan is to remove max_random and do a quick "top level" search
-        for which patterns repeat, and decide in advance an appropriate
-        percentage of the file size...
-
-        we need to find the repeating patterns, then have fuzzy boundaries
-
-        e.g.
-        (middle1)+(middle2)+(middle3)+
-
-        pick 3 points in the file
-        p1 = random(0-100)
-        p2 = random(p1-100)
-        p3 = as close to the end as any fixed points will let us get...
-
-        when generating the repeaters make sure we cross the boundaries
-
-        obviously this has it's own problems, but it's mainly to do with
-        generating the right number of bytes...
+        Only fully supports sequential reading, however, any read with start or
+        end range within a specified prefix or suffix pattern will produce
+        appropriate output (this is necessary for metadata testing functions).
         """
-        return ""
+        if not start == self.end_last_read + 1:
+            # If we're not reading sequentially, get rid of any remainder
+            self.remainder = ""
+
+        self.end_last_read = end
+
+        if start < self.suffix_length:
+            self.remainder = ""
+            content = self.suffix[start:]
+        else:
+            content = self.remainder
+
+        chunk_size = end - start
+
+        # This look horrendous
+        # TODO: tidy up the read logic
+        if end > (self.size - self.suffix_length):
+            # If we're sufficiently close to the end size of the contents
+            # requested, then we need to consider padding and suffix
+            last = self.suffix[:self.size - end]
+            content_length = len(content)
+            more = self.remainder
+            while len(content) < (chunk_size - len(last)):
+                more += self.filler.generate()
+                still_required = chunk_size - content_length - len(last)
+                if len(more) > still_required:
+                    pad = self.__get_padding__(still_required)
+                    content += pad
+                    content += last
+                    return content
+                else:
+                    content += more
+                    content += last
+        else:
+            content_length = len(content)
+            more = self.remainder
+            while len(content) < chunk_size:
+                more += self.filler.generate()
+                still_required = chunk_size - content_length
+                if len(more) > still_required:
+                    overrun = len(more) - still_required
+                    if (end + overrun) > (self.size - self.prefix_length):
+                        final = self.__get_padding__(still_required)
+                        self.remainder = self.__get_padding__(overrun)
+                    else:
+                        self.remainder = more[still_required:]
+                        final = more[:still_required]
+                    content += final
+                    return content
+                else:
+                    content += more
+
+    def __get_padding__(self, size):
+        pad = ""
+        while len(pad) < size:
+            pad += self.padder.generate()
+        return pad[:size]
 
 
 class Xeger(object):
@@ -115,27 +207,10 @@ class Xeger(object):
     from the file generated (to support metadata checking)
     """
 
-    def __init__(self, regex, size, max_random=128):
-        self.max_random = max_random
+    def __init__(self, regex, size, random):
+        self.random = random
         self.__size__ = size
-        self.__parse_pattern__(regex)
-
-    def __parse_pattern__(self, regex):
-        if regex.startswith('^'):
-            fixed_start = True
-            regex = regex[1:]
-
-        if regex.endswith('$'):
-            fixed_end = True
-            regex = regex[:-1]
-
-        self.pattern = XegerPattern(regex, self.max_random)
-
-        if fixed_start:
-            self.prefix = self.pattern.generate_prefix()
-
-        if fixed_end:
-            self.suffix = self.pattern.generate_suffix()
+        self.pattern = XegerPattern(regex, self.random)
 
     def generate(self):
         while True:
