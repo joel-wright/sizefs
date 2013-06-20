@@ -8,27 +8,20 @@ For example, reading a file named 128M+1B will return a file of 128 Megabytes
 plus 1 byte, reading a file named 128M-1B will return a file of 128 Megabytes
 minus 1 byte
 
-Caveats
--------
+We need to set 4 properties:
 
-There are a few caveats to bear in mind for use:
+    header  - defined pattern for the start of a file (default = "")
+    footer  - defined pattern for the end of a file (default = "")
+    filler  - repeating pattern to fill file content (default = [a-zA-Z0-9])
+    padding - single character to fill between content and footer (default = " ")
 
-1. The regex will not be broken (must have repeating patterns to fill a
-   requested file size).
-2. Repeating patterns may be truncated if a pattern is not completed before the
-   requested file size is reached, or truncated in favour of a fixed file
-   'footer'.
-3. Is requested file sizes are very small then patterns may be truncated
+If the requested file sizes are too small for the combination of header, footer
+and some padding, then a warning will be logged, but the file will still
+return as much content as possible to fill the exact file size requested.
 
-Good example Regexes:
+The file contents will always match the following regex:
 
-    ^<starting_header>[a-zA-Z0-9]*<ending_footer>$  -- header & footer, random contents
-    (([a-z]*)middle([0-9]+)+  -- whole pattern repeats (but may be truncated)
-
-Bad examples:
-
-    ^content$  -- fixed size
-    ^start(middle1)+(middle2)+(middle3)+end$  -- only final pattern repeated
+    ^header(filler)*(padding)*footer$
 
 Example Usage
 -------------
