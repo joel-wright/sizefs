@@ -13,7 +13,6 @@ class FastRandom(object):
 
     This is faster and good enough for a "random" filler
     """
-
     def __init__(self, min, max, len=255):
         # Generate a small list of random numbers
         self.randoms = [random.randint(min, max) for i in range(len)]
@@ -30,7 +29,9 @@ class FastRandom(object):
 
 
 class XegerError(Exception):
-
+    """
+    Exception type for reporting Xeger generation errors
+    """
     def __init__(self, value):
         self.value = value
 
@@ -38,26 +39,6 @@ class XegerError(Exception):
         return repr(self.value)
 
 
-# BNF for acceptable Regex:
-#
-#   <Regex> ::= <Pattern>
-#
-#   <Pattern> ::= <Expression>
-#             | <Expression> <Pattern>
-#
-#   <Expression> ::= <Char> [<Multiplier>]
-#                | "(" <Pattern> ")" [<Multiplier>]
-#                | "[" <Set> "]" [<Multiplier>]
-#
-#   <Multiplier> ::= "*"
-#                | "+"
-#                | "?"
-#                | '{' <Num> '}'
-#
-#   <Set> ::= <Char>
-#           | <Char> "-" <Char>
-#           | <Set> <Set>
-#
 class XegerGen(object):
     """
     The generator uses up to 4 regular expressions to generate the contents
@@ -73,13 +54,31 @@ class XegerGen(object):
      - padder: if a complex filler pattern generated does not fit within
                the remaining space left in the generated file, padding
                is used to fill the remaining space. This should always be
-               as simple as possible (preferably generating individial
+               as simple as possible (preferably generating individual
                characters).
                defaults to 0*
 
-    The file will be generated as follows:
+    The file will be generated as follows: (prefix)(filler)*(padder)*(suffix)
 
-    (prefix)(filler)*(padder)*(suffix)
+    BNF for acceptable Xeger patterns:
+
+      <Xeger> ::= <Pattern>
+
+      <Pattern> ::= <Expression>
+                | <Expression> <Pattern>
+
+      <Expression> ::= <Char> [<Multiplier>]
+                   | "(" <Pattern> ")" [<Multiplier>]
+                   | "[" <Set> "]" [<Multiplier>]
+
+      <Multiplier> ::= "*"
+                   | "+"
+                   | "?"
+                   | '{' <Num> '}'
+
+      <Set> ::= <Char>
+              | <Char> "-" <Char>
+              | <Set> <Set>
 
     The generator will always produce a string containing the prefix and
     suffix if a string of sufficient size is requested. Following that, the
@@ -95,7 +94,6 @@ class XegerGen(object):
     file contents, however prefix and suffix will always be consistent with
     the requested pattern.
     """
-
     def __init__(self, size, filler=None, prefix=None,
                  suffix=None, padder=None, max_random=128):
         self.size = size
@@ -206,7 +204,6 @@ class Xeger(object):
     regenerated components to allow for consistent reading of these portions
     from the file generated (to support metadata checking)
     """
-
     def __init__(self, regex, size, random):
         self.random = random
         self.__size__ = size
@@ -231,7 +228,6 @@ class XegerPattern(object):
     This generates a list of top-level expressions that can be used to generate
     the contents of a file.
     """
-
     def __init__(self, regex, max_random=128):
         self.__max_random__ = max_random
         self.__parse_expressions__(regex)
@@ -277,7 +273,6 @@ class XegerExpression(object):
     """
     Parses an Expression from a list of input characters
     """
-
     def __init__(self, regex_list, max_random=128):
         self.__max_random__ = max_random
         self.__get_generator__(regex_list)
@@ -374,9 +369,8 @@ class XegerMultiplier(object):
     """
     Represents a multiplier
     """
-
     def __init__(self, regex, max_random=128):
-        self.max_random = max_random
+        self.__max_random__ = max_random
         self.__get_multiplier__(regex)
 
     def __get_multiplier__(self, regex):
@@ -391,56 +385,53 @@ class XegerMultiplier(object):
                 started = True
             elif c == '}':
                 if mult:
-                    self.random = False
-                    self.constant = int("".join(mult))
+                    self.__random_pattern__ = False
+                    try:
+                        self.__constant__ = int("".join(mult))
+                    except:
+                        raise XegerError("Multiplier must be a number")
                     return
                 else:
                     raise XegerError("Illegal end of multiplier pattern")
-            elif c in ['*', '+']:
+            elif c in ['*', '+', '?']:
                 if started:
                     raise XegerError("Error in multiplier pattern")
                 else:
-                    self.random = True
+                    self.__random_pattern__ = True
                     if c == '+':
-                        self.min_random = 1
+                        self.__random__ = FastRandom(1, self.__max_random__)
+                    elif c == '*':
+                        self.__random__ = FastRandom(0, self.__max_random__)
                     else:
-                        self.min_random = 0
+                        self.__random__ = FastRandom(0, 1)
                     return
             else:
                 if started:
-                    try:
-                        int(c)
-                        mult.append(c)
-                    except:
-                        raise XegerError("Multipler must be a number")
+                    mult.append(c)
                 else:
                     break
 
         if started:
             raise XegerError("Incomplete multiplier")
         else:
-            self.random = False
-            self.constant = 1
+            self.__random_pattern__ = False
+            self.__constant__ = 1
 
     def generate(self):
         if not self.random:
-            return self.constant
+            return self.__constant__
         else:
-            return random.randint(self.min_random, self.max_random)
+            return self.__random__.rand()
 
 
 class XegerSequence(object):
     """
     Simple generator, just returns the sequence on each call to generate
     """
-
-    def __init__(self, list):
-        self.sequence = "".join(list)
+    def __init__(self, character_list):
+        self.sequence = "".join(character_list)
 
     def generate(self):
-        return self.sequence
-
-    def generate_complete(self):
         return self.sequence
 
 
@@ -449,7 +440,6 @@ class XegerSet(object):
     Set generator, parses an input list for a set and returns a single element
     on each call to generate (generate_complete is identical)
     """
-
     def __init__(self, regex):
         self.__parse_set__(regex)
 
@@ -463,6 +453,7 @@ class XegerSet(object):
                 if not ch1 == '':
                     select_list.append(ch1)
                     self.__set__ = select_list
+                    self.__random__ = FastRandom(0, len(self.__set__) - 1)
                     return
                 else:
                     raise XegerError("Error in set description")
@@ -486,4 +477,8 @@ class XegerSet(object):
     def __char_range__(self, a, b):
         for c in xrange(ord(a), ord(b) + 1):
             yield chr(c)
+
+    def generate(self):
+        return self.__set__[self.__random__.rand()]
+
 
