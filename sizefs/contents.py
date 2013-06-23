@@ -96,40 +96,59 @@ class XegerGen(object):
     """
     def __init__(self, size, filler=None, prefix=None,
                  suffix=None, padder=None, max_random=128):
-        self.size = size
-        self.random = FastRandom(max_random)
-        self.logger = logging.getLogger(__name__)
+        self.__size__ = size
+        self.__end_last_read__ = 0
+        self.__logger__ = logging.getLogger()
+
+        if filler == "":
+            self.__logger__.error("Empty filler pattern supplied,"
+                                  " using default")
+            filler = None
+        elif padder == "":
+            self.__logger__.error("Empty padder pattern supplied,"
+                                  " using default")
+            padder = None
+        elif prefix == "":
+            self.__logger__.error("Empty prefix pattern supplied,"
+                                  " using default")
+            prefix = None
+        elif suffix == "":
+            self.__logger__.error("Empty suffix pattern supplied,"
+                                  " using default")
+            suffix = None
 
         if filler is not None:
-            self.filler = Xeger(filler, self.random)
+            self.__filler__ = Xeger(filler, max_random)
         else:
-            self.filler = Xeger("0", self.random)
+            self.__filler__ = Xeger("0", max_random)
+        self.__filler_gen__ = self.__filler__.generate()
 
         if padder is not None:
-            self.padder = Xeger(padder, self.random)
+            self.__padder__ = Xeger(padder, max_random)
         else:
-            self.padder = Xeger("0", self.random)
+            self.__padder__ = Xeger("0", max_random)
+        self.__padder_gen__ = self.__padder__.generate()
 
         if prefix is not None:
-            self.prefix = Xeger(prefix, self.random).generate_complete()
-            self.prefix_length = len(self.prefix)
+            self.__prefix__ = Xeger(prefix, max_random).generate_complete()
+            self.__prefix_length__ = len(self.__prefix__)
         else:
-            self.prefix = ""
-            self.prefix_length = 0
+            self.__prefix__ = ""
+            self.__prefix_length__ = 0
 
         if suffix is not None:
-            self.suffix = Xeger(suffix, self.random).generate_complete()
-            self.suffix_length = len(self.suffix)
+            self.__suffix__ = Xeger(suffix, max_random).generate_complete()
+            self.__suffix_length__ = len(self.__suffix__)
         else:
-            self.suffix = ""
-            self.suffix_length = 0
+            self.__suffix__ = ""
+            self.__suffix_length__ = 0
 
-        if size < (self.prefix_length + self.suffix_length):
-            self.logger.error("Prefix and suffix combination is longer than"
+        if size < (self.__prefix_length__ + self.__suffix_length__):
+            self.__logger__.error("Prefix and suffix combination is longer than"
                               "the requested size of the file. One or both will"
                               "be truncated")
 
-    def __read__(self, start, end):
+    def read(self, start, end):
         """
         Return regex content.
 
@@ -137,15 +156,21 @@ class XegerGen(object):
         end range within a specified prefix or suffix pattern will produce
         appropriate output (this is necessary for metadata testing functions).
         """
-        if not start == self.end_last_read + 1:
+        if end > self.__size__ - 1:
+            self.__logger__.error("Can't read past the end")
+
+        if start < 0:
+            self.__logger__.error("Can't read before the beginning")
+
+        if not start == self.__end_last_read__ + 1:
             # If we're not reading sequentially, get rid of any remainder
             self.remainder = ""
 
-        self.end_last_read = end
+        self.__end_last_read__ = end
 
-        if start < self.suffix_length:
+        if start < self.__prefix_length__:
             self.remainder = ""
-            content = self.suffix[start:]
+            content = self.__prefix__[start:]
         else:
             content = self.remainder
 
@@ -153,71 +178,79 @@ class XegerGen(object):
 
         # This look horrendous
         # TODO: tidy up the read logic
-        if end > (self.size - self.suffix_length):
+        if end > (self.__size__ - self.__suffix_length__):
             # If we're sufficiently close to the end size of the contents
             # requested, then we need to consider padding and suffix
-            last = self.suffix[:self.size - end]
-            content_length = len(content)
-            more = self.remainder
+            last = self.__suffix__[:self.__suffix_length__ +
+                                    (end - (self.__size__ - 1))]
             while len(content) < (chunk_size - len(last)):
-                more += self.filler.generate()
-                still_required = chunk_size - content_length - len(last)
+                more = self.__get_filler__()
+                still_required = chunk_size - len(content) - len(last)
                 if len(more) > still_required:
                     pad = self.__get_padding__(still_required)
                     content += pad
-                    content += last
-                    return content
                 else:
                     content += more
-                    content += last
+            content += last
+            return content
         else:
-            content_length = len(content)
-            more = self.remainder
             while len(content) < chunk_size:
-                more += self.filler.generate()
-                still_required = chunk_size - content_length
+                print("content len: %s, chunk_size: %s" % (len(content),
+                                                           chunk_size))
+                more = self.__get_filler__()
+                still_required = chunk_size - len(content)
                 if len(more) > still_required:
                     overrun = len(more) - still_required
-                    if (end + overrun) > (self.size - self.prefix_length):
+                    if (end + overrun) > (self.__size__ - 1 -
+                                          self.__suffix_length__):
                         final = self.__get_padding__(still_required)
                         self.remainder = self.__get_padding__(overrun)
                     else:
-                        self.remainder = more[still_required:]
-                        final = more[:still_required]
+                        if (end + overrun) > self.__size__ - 1:
+                            final = self.__get_padding__(still_required)
+                        else:
+                            self.remainder = more[still_required:]
+                            final = more[:still_required]
                     content += final
-                    return content
                 else:
                     content += more
+            return content
 
     def __get_padding__(self, size):
-        pad = ""
-        while len(pad) < size:
-            pad += self.padder.generate()
-        return pad[:size]
+        pad = []
+        pad_length = 0
+        print("%s was requested" % size)
+
+        while pad_length < size:
+            pad_content = self.__padder__.generate_complete()
+            pad.append(pad_content)
+            pad_length += len(pad_content)
+
+        return "".join(pad)[:size]
+
+    def __get_filler__(self):
+        return self.__filler__.generate_complete()
 
 
 class Xeger(object):
     """
     Parses a given regex pattern and yields content on demand.
 
-    Prefix and suffix patterns are generated, stored and removed from the
-    regenerated components to allow for consistent reading of these portions
-    from the file generated (to support metadata checking)
+    regex - a string describing the requested pattern
+    max_random - a value passed within the generator describing the maximum
+                 number of repeats for * or + operators
     """
-    def __init__(self, regex, size, random):
-        self.random = random
-        self.__size__ = size
-        self.pattern = XegerPattern(regex, self.random)
+    def __init__(self, regex, max_random=128):
+        self.__pattern__ = XegerPattern(regex, max_random=max_random)
 
     def generate(self):
-        while True:
-            for content in self.pattern.generate():
-                yield content
+        for content in self.__pattern__.generate():
+            yield content
 
     def generate_complete(self):
         generated_content = []
-        for expression in self.expressions:
-            generated_content.append(expression.generate_complete())
+        for pattern_content in self.generate():
+            generated_content.append(pattern_content)
         return "".join(generated_content)
 
 
@@ -238,34 +271,21 @@ class XegerPattern(object):
         while regex_list:
             expression = XegerExpression(regex_list, self.__max_random__)
             self.__expressions__.append(expression)
-
-    def generate_prefix(self):
-        if self.length() > 0:
-            prefix = self.__expressions__[0].generate_complete()
-            self.__expressions__ = self.__expressions__[1:]
-            return prefix
-        else:
-            return ""
-
-    def generate_suffix(self):
-        if self.length() > 0:
-            suffix = self.__expressions__[-1].generate_complete()
-            self.__expressions__ = self.__expressions__[:-1]
-            return suffix
-        else:
-            return ""
+        print("there were %s expressions" % len(self.__expressions__))
 
     def length(self):
         return len(self.__expressions__)
 
     def generate(self):
         for expression in self.__expressions__:
-            yield expression.generate()
+            for ex in expression.generate():
+                yield ex
 
     def generate_complete(self):
         generated_content = []
         for expression in self.__expressions__:
-            generated_content.append(expression.generate_complete())
+            for expression_content in expression.generate():
+                generated_content.append(expression_content)
         return "".join(generated_content)
 
 
@@ -279,6 +299,7 @@ class XegerExpression(object):
 
     def __get_generator__(self, regex):
         accum = []
+        print("regex: %s" % regex)
 
         while regex:
             c = regex.pop(0)
@@ -312,32 +333,36 @@ class XegerExpression(object):
                 accum.append(c)
                 c = regex.pop(0)
                 accum.append(c)
-            elif c in ['{', '*', '+']:  # We've reached a multiplier
+            elif c in ['{', '*', '+', '?']:  # We've reached a multiplier
+                print("accum: %s" % accum)
                 if len(accum) == 1:  # just multiply a single character
+                    regex.insert(0, c)
                     self.__generator__ = XegerSequence(accum)
-                    self.__multiplier__ = XegerMultiplier(regex.insert(0, c))
+                    self.__multiplier__ = XegerMultiplier(regex)
                     self.__is_constant_multiplier__()
                     return
                 elif len(accum) > 1:  # only multiply the last character
-                    last_c = accum[-1]
+                    last_c = accum.pop(-1)
                     regex.insert(0, c)
                     regex.insert(0, last_c)
-                    self.__generator__ = XegerSequence(accum[:-1])
-                    self.__multiplier__ = XegerMultiplier(regex)
-                    self.__is_constant_multiplier__()
+                    print("regex: %s" % regex)
+                    self.__generator__ = XegerSequence(accum)
+                    self.__constant_multiplier__ = True
+                    self.__multiplier__ = 1
                     return
             else:  # just keep collecting boring characters
                 accum.append(c)
 
         if accum:  # If there's anything left in the accumulator, must be chars
+            print("Accum: %s" % accum)
             self.__generator__ = XegerSequence(accum)
             self.__constant_multiplier__ = True
             self.__multiplier__ = 1
 
     def __is_constant_multiplier__(self):
-        if not self.__multiplier__.random:
+        if not self.__multiplier__.is_random:
             self.__constant_multiplier__ = True
-            self.__multiplier__ = self.__multiplier__.generate()
+            self.__multiplier__ = self.__multiplier__.value()
         else:
             self.__constant_multiplier__ = False
 
@@ -358,11 +383,18 @@ class XegerExpression(object):
         raise XegerError("Incomplete expression")
 
     def generate(self):
-        while True:
-            yield self.__generator__.generate()
+        content = []
 
-    def generate_complete(self):
-        self.__generator__.generate_complete()
+        if self.__constant_multiplier__:
+            mult = self.__multiplier__
+        else:
+            mult = self.__multiplier__.value()
+
+        for x in range(mult):
+            content += self.__generator__.generate_complete()
+
+        print("content: %s" % content)
+        yield "".join(content)
 
 
 class XegerMultiplier(object):
@@ -379,13 +411,14 @@ class XegerMultiplier(object):
 
         while regex:
             c = regex.pop(0)
+            print("Mult regex: %s" % regex)
             if c == '{':
                 if mult:
                     raise XegerError("Error in multiplier pattern")
                 started = True
             elif c == '}':
                 if mult:
-                    self.__random_pattern__ = False
+                    self.is_random = False
                     try:
                         self.__constant__ = int("".join(mult))
                     except:
@@ -397,7 +430,7 @@ class XegerMultiplier(object):
                 if started:
                     raise XegerError("Error in multiplier pattern")
                 else:
-                    self.__random_pattern__ = True
+                    self.is_random = True
                     if c == '+':
                         self.__random__ = FastRandom(1, self.__max_random__)
                     elif c == '*':
@@ -414,14 +447,14 @@ class XegerMultiplier(object):
         if started:
             raise XegerError("Incomplete multiplier")
         else:
-            self.__random_pattern__ = False
+            self.is_random = False
             self.__constant__ = 1
 
-    def generate(self):
-        if not self.random:
-            return self.__constant__
-        else:
+    def value(self):
+        if self.is_random:
             return self.__random__.rand()
+        else:
+            return self.__constant__
 
 
 class XegerSequence(object):
@@ -429,10 +462,11 @@ class XegerSequence(object):
     Simple generator, just returns the sequence on each call to generate
     """
     def __init__(self, character_list):
-        self.sequence = "".join(character_list)
+        self.__sequence__ = "".join(character_list)
+        print("Sequence: %s" % self.__sequence__)
 
-    def generate(self):
-        return self.sequence
+    def generate_complete(self):
+        return self.__sequence__
 
 
 class XegerSet(object):
@@ -451,9 +485,10 @@ class XegerSet(object):
             c = regex.pop(0)
             if c == ']':
                 if not ch1 == '':
-                    select_list.append(ch1)
+                    #select_list.append(ch1)
                     self.__set__ = select_list
                     self.__random__ = FastRandom(0, len(self.__set__) - 1)
+                    print("set: %s" % select_list)
                     return
                 else:
                     raise XegerError("Error in set description")
@@ -463,13 +498,16 @@ class XegerSet(object):
                 elif len(regex) == 0:
                     raise XegerError("Incomplete set description")
                 else:
+                    # Remove the unneeded character from the last loop
+                    select_list.pop(-1)
                     ch2 = regex.pop(0)
                     set_extras = self.__char_range__(ch1, ch2)
                     for extra in set_extras:
                         select_list.append(extra)
-                    ch1 = ''
+                    #ch1 = ''
             else:
                 ch1 = c
+                select_list.append(ch1)
 
         # The range was incomplete because we never reached the closing brace
         raise XegerError("Incomplete set description")
@@ -478,7 +516,7 @@ class XegerSet(object):
         for c in xrange(ord(a), ord(b) + 1):
             yield chr(c)
 
-    def generate(self):
+    def generate_complete(self):
         return self.__set__[self.__random__.rand()]
 
 
