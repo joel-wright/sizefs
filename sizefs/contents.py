@@ -1,6 +1,10 @@
 import random
 import logging
 
+DEBUG = True
+
+if DEBUG:
+    logging.getLogger().setLevel(logging.DEBUG)
 
 class FastRandom(object):
     """
@@ -94,6 +98,8 @@ class XegerGen(object):
     file contents, however prefix and suffix will always be consistent with
     the requested pattern.
     """
+    reserved_chars = ['[', ']', '{', '}', '*', '+', '?']
+
     def __init__(self, size, filler=None, prefix=None,
                  suffix=None, padder=None, max_random=128):
         self.__size__ = size
@@ -195,8 +201,6 @@ class XegerGen(object):
             return content
         else:
             while len(content) < chunk_size:
-                print("content len: %s, chunk_size: %s" % (len(content),
-                                                           chunk_size))
                 more = self.__get_filler__()
                 still_required = chunk_size - len(content)
                 if len(more) > still_required:
@@ -219,7 +223,6 @@ class XegerGen(object):
     def __get_padding__(self, size):
         pad = []
         pad_length = 0
-        print("%s was requested" % size)
 
         while pad_length < size:
             pad_content = self.__padder__.generate_complete()
@@ -271,7 +274,6 @@ class XegerPattern(object):
         while regex_list:
             expression = XegerExpression(regex_list, self.__max_random__)
             self.__expressions__.append(expression)
-        print("there were %s expressions" % len(self.__expressions__))
 
     def length(self):
         return len(self.__expressions__)
@@ -299,7 +301,6 @@ class XegerExpression(object):
 
     def __get_generator__(self, regex):
         accum = []
-        print("regex: %s" % regex)
 
         while regex:
             c = regex.pop(0)
@@ -330,11 +331,10 @@ class XegerExpression(object):
                     self.__multiplier__ = 1
                     return
             elif c == '\\':  # Escape the next character
-                accum.append(c)
+                #accum.append(c)
                 c = regex.pop(0)
                 accum.append(c)
             elif c in ['{', '*', '+', '?']:  # We've reached a multiplier
-                print("accum: %s" % accum)
                 if len(accum) == 1:  # just multiply a single character
                     regex.insert(0, c)
                     self.__generator__ = XegerSequence(accum)
@@ -345,16 +345,16 @@ class XegerExpression(object):
                     last_c = accum.pop(-1)
                     regex.insert(0, c)
                     regex.insert(0, last_c)
-                    print("regex: %s" % regex)
                     self.__generator__ = XegerSequence(accum)
                     self.__constant_multiplier__ = True
                     self.__multiplier__ = 1
                     return
+                else:
+                    raise XegerError("Multiplier used without expression")
             else:  # just keep collecting boring characters
                 accum.append(c)
 
         if accum:  # If there's anything left in the accumulator, must be chars
-            print("Accum: %s" % accum)
             self.__generator__ = XegerSequence(accum)
             self.__constant_multiplier__ = True
             self.__multiplier__ = 1
@@ -393,7 +393,6 @@ class XegerExpression(object):
         for x in range(mult):
             content += self.__generator__.generate_complete()
 
-        print("content: %s" % content)
         yield "".join(content)
 
 
@@ -411,7 +410,6 @@ class XegerMultiplier(object):
 
         while regex:
             c = regex.pop(0)
-            print("Mult regex: %s" % regex)
             if c == '{':
                 if mult:
                     raise XegerError("Error in multiplier pattern")
@@ -442,6 +440,7 @@ class XegerMultiplier(object):
                 if started:
                     mult.append(c)
                 else:
+                    regex.insert(0, c)
                     break
 
         if started:
@@ -463,7 +462,6 @@ class XegerSequence(object):
     """
     def __init__(self, character_list):
         self.__sequence__ = "".join(character_list)
-        print("Sequence: %s" % self.__sequence__)
 
     def generate_complete(self):
         return self.__sequence__
@@ -475,6 +473,9 @@ class XegerSet(object):
     on each call to generate (generate_complete is identical)
     """
     def __init__(self, regex):
+        if DEBUG:
+            self.__logger__ = logging.getLogger()
+            self.__logger__.debug("Parsing Set from regex: %s" % "".join(regex))
         self.__parse_set__(regex)
 
     def __parse_set__(self, regex):
@@ -485,10 +486,8 @@ class XegerSet(object):
             c = regex.pop(0)
             if c == ']':
                 if not ch1 == '':
-                    #select_list.append(ch1)
                     self.__set__ = select_list
                     self.__random__ = FastRandom(0, len(self.__set__) - 1)
-                    print("set: %s" % select_list)
                     return
                 else:
                     raise XegerError("Error in set description")
@@ -504,7 +503,12 @@ class XegerSet(object):
                     set_extras = self.__char_range__(ch1, ch2)
                     for extra in set_extras:
                         select_list.append(extra)
-                    #ch1 = ''
+            elif c == '\\':  # Escape the next character
+                c = regex.pop(0)
+                ch1 = c
+                select_list.append(c)
+            elif c in XegerGen.reserved_chars:
+                raise XegerError("Non-escaped special character in set")
             else:
                 ch1 = c
                 select_list.append(ch1)
