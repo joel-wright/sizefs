@@ -3,7 +3,7 @@
 import logging
 
 from collections import defaultdict
-from errno import ENOENT, EPERM, EEXIST
+from errno import ENOENT, EPERM, EEXIST, ENODATA, ENOTEMPTY
 from stat import S_IFDIR, S_IFLNK, S_IFREG
 from sys import argv, exit
 from time import time
@@ -41,10 +41,10 @@ class SizeFSFuse(LoggingMixIn, Operations):
     sizes = {'B': 1, 'K': 1024, 'M': 1024**2, 'G': 1024**3,
              'T': 1024**4, 'P': 1024**5, 'E': 1024**6}
 
-
     def __init__(self):
         self.folders = {}
         self.files = {}
+        self.xattrs = {}
         self.data = defaultdict(bytes)
         self.fd = 0
         now = time()
@@ -53,12 +53,14 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
         # Create the default dirs (zeros, ones, common)
         self.mkdir('/zeros', (S_IFDIR | 0664))
-        self.setxattr('/zeros', "pattern", "0", None)
+        self.setxattr('/zeros', "filler", "0", None)
+        self.__add_default_files__('/zeros')
         self.mkdir('/ones', (S_IFDIR | 0664))
-        self.setxattr('/ones', "pattern", "1", None)
+        self.setxattr('/ones', "filler", "1", None)
+        self.__add_default_files__('/ones')
         self.mkdir('/alpha_num', (S_IFDIR | 0664))
-        self.setxattr('/alpha_num', "pattern", "[a-z,A-Z,0-9]", None)
-
+        self.setxattr('/alpha_num', "filler", "[a-zA-Z0-9]", None)
+        self.__add_default_files__('/alpha_num')
 
     def chmod(self, path, mode):
         """
@@ -83,23 +85,33 @@ class SizeFSFuse(LoggingMixIn, Operations):
         (folder, filename) = os.path.split(path)
 
         if folder in self.folders and not folder == "/":
-            if FILE_REGEX.match(filename):
-                self.files[path] = "Create a generator for it"
+            __m__ = FILE_REGEX.match(filename)
+            if __m__:
+                attrs = self.__file_attrs__(__m__)
+                size_bytes = attrs['st_size']
+
+                # Get the inherited xattrs from the containing folder and create
+                # the content generator
+                folder_xattrs = self.xattrs[folder]
+                filler = folder_xattrs.get("filler", None)
+                prefix = folder_xattrs.get("prefix", None)
+                suffix = folder_xattrs.get("suffix", None)
+                padder = folder_xattrs.get("padder", None)
+                max_random = int(folder_xattrs.get("max_random", None))
+
+                self.files[path] = {
+                    'attrs': attrs,
+                    'generator': XegerGen(size_bytes,
+                                          filler=filler,
+                                          prefix=prefix,
+                                          suffix=suffix,
+                                          padder=padder,
+                                          max_random=max_random)
+                }
             else:
                 raise FuseOSError(EPERM)
         else:
             raise FuseOSError(EPERM)
-
-    def cread(self, path, size, offset, fh):
-        """
-         For code use only - creates a file and allows it to be read
-         combined create and read **for programmatic use - ignored by fuse**
-        """
-        if path in self.files:
-            self.read(path, size, offset, fh)
-        else:
-            self.create(path, 0664)
-            self.read(path, size, offset, fh)
 
     def getattr(self, path, fh=None):
         """
@@ -107,50 +119,44 @@ class SizeFSFuse(LoggingMixIn, Operations):
          self.folders map, or it returns a standard attribute dict for any valid
          files
         """
-        (folder, filename) = os.path.split(path)
-
-        if not folder in self.folders:
-            raise FuseOSError(ENOENT)
-
         if path in self.folders:
             return self.folders[path]
-        else:
-            if filename == "." or filename == "..":
-                return dict(st_mode=(S_IFDIR | 0444), st_nlink=1,
-                            st_size=0, st_ctime=time(), st_mtime=time(),
-                            st_atime=time())
-            else:
-                if folder == "/":
-                    raise FuseOSError(ENOENT)
-                else:
-                    m = FILE_REGEX.match(filename)
-                    if m:
-                        return self.__file_attrs__(m)
-                    else:
-                        raise FuseOSError(ENOENT)
+
+        if path in self.files:
+            return self.files[path]['attrs']
+
+        (folder, filename) = os.path.split(path)
+
+        if filename == ".":
+            if folder in self.folder:
+                return self.folders[folder]
+
+        if filename == "..":
+            (parent_folder, child_folder) = os.path.split(folder)
+            if parent_folder in self.folders:
+                return self.folders[parent_folder]
+
+        raise FuseOSError(ENOENT)
 
     def getxattr(self, path, name, position=0):
         """
          Returns an extended attribute of a file/folder
-         This is always an ENOATTR error for files, and the only thing that
-         should ever really be used for folders is the pattern
-        """
-        folder_meta = self.folders.get(path, {})
-        attrs = folder_meta.get('attrs', {})
 
-        if name in attrs:
-            return attrs[name]
-        else:
-            return " "
+         If the xattr does not exist we return ENODATA (synonymous with ENOATTR)
+        """
+        if path in self.xattrs:
+            path_xattrs = self.xattrs[path]
+            if name in path_xattrs:
+                return path_xattrs[name]
+            else:
+                raise FuseOSError(ENODATA)
 
     def listxattr(self, path):
         """
-         Return a list of all extended attribute names for a folder
-         (always empty for files)
+         Return a list of all extended attribute names for a file/folder
         """
-        folder_meta = self.folders.get(path, {})
-        attrs = folder_meta.get('attrs', {})
-        return attrs.keys()
+        path_xattrs = self.xattrs.get(path, {})
+        return path_xattrs.keys()
 
     def mkdir(self, path, mode):
         """
@@ -166,54 +172,28 @@ class SizeFSFuse(LoggingMixIn, Operations):
                                   st_size=0, st_ctime=time(), st_mtime=time(),
                                   st_atime=time())
 
-        # Set the default pattern for a folder to "0" so that all new folders
-        # default to filling files with zeros
-        self.setxattr(path, "pattern", "0", None)
         self.folders['/']['st_nlink'] += 1
-
-        # Add default files
-        for default_file in self.default_files:
-            attr = self.__file_attrs__(FILE_REGEX.match(default_file))
-            new_filepath = os.path.join(path, default_file)
-            self.files.setdefault(new_filepath, {"attrs": attr})
-
-    def mkdir_regex(self, path, regex):
-        """
-         Only for programmatic use, never called by FUSE
-        """
-        if path in self.folders:
-            raise FuseOSError(EEXIST)
-        else:
-            self.mkdir(path, 0644)
-            self.setxattr(path, "pattern", regex, None)
 
     def open(self, path, flags):
         """
-         We check that a file conforms to a size spec and is from a requested
-         folder
+         We check that a file exists in the file dictionary and return a
+         unique file descriptor if so
         """
-        (folder, filename) = os.path.split(path)
-
-        # Does the folder exist?
-        if not folder in self.folders:
+        if not path in self.files:
             raise FuseOSError(ENOENT)
-
-        # Does the requested filename match our size spec?
-        if not FILE_REGEX.match(filename):
-            raise FuseOSError(ENOENT)
-
-        # Now do the right thing and open one of the file objects
-        # (add it to files)
 
         self.fd += 1
         return self.fd
 
-    # FIX ME!!! - need to read from, and keep track of position in, generator
     def read(self, path, size, offset, fh):
         """
          Returns content based on the pattern of the containing folder
         """
-        return "Hello, World!"[offset:size+offset]
+        if path in self.files:
+            content = self.files[path]['generator'].read(offset, offset+size-1)
+            return content
+        else:
+            raise FuseOSError(ENOENT)
 
     def readdir(self, path, fh):
         folder_names = ['.', '..']
@@ -233,28 +213,57 @@ class SizeFSFuse(LoggingMixIn, Operations):
         return self.data[path]
 
     def removexattr(self, path, name):
-        attrs = self.folders[path].get('attrs', {})
+        path_xattrs = self.xattrs[path]
 
-        if name in attrs:
-            del attrs[name]
+        if name in path_xattrs:
+            del path_xattrs[name]
+            # update or create new generator
 
     def rename(self, old, new):
-        self.folders[new] = self.folders.pop(old)
+        """
+        Rename a folder
 
+        We allow renaming of folders as this will not affect the contents of
+        the folder. We raise a permissions error for files, because renaming
+        a file changes the meaning of its content generator.
+        """
+        if old in self.folders:
+            if new in self.folders:
+                raise FuseOSError(EPERM)
 
-    # FIX ME
+            self.folders[new] = self.folders.pop(old)
+            for file in self.files:
+                (folder, filename) = os.path.split(file)
+                if old == folder:
+                    new_path = os.path.join(new, filename)
+                    self.files[new_path] = self.files.pop(file)
+
+        if old in self.files:
+            raise FuseOSError(EPERM)
+
+        raise FuseOSError(ENOENT)
+
     def rmdir(self, path):
-        raise FuseOSError(EPERM)
-        #self.files.pop(path)
-        #self.files['/']['st_nlink'] -= 1
+        if path in self.folders:
+            for file in self.files:
+                (parent_folder, filename) = os.path.split(file)
+                if parent_folder == path:
+                    raise FuseOSError(ENOTEMPTY)
+
+            del self.folders[path]
+            del self.xattrs[path]
+            self.folders['/']['st_nlink'] -= 1
+        else:
+            raise FuseOSError(ENOENT)
 
     def setxattr(self, path, name, value, options, position=0):
         # Ignore options
-        if path in self.folders:
-            attrs = self.folders[path].setdefault('attrs', {})
-            attrs[name] = value
+        if path in self.xattrs:
+            path_xattrs = self.xattrs[path]
+            path_xattrs[name] = value
+            # Update or create new generator
         else:
-            raise FuseOSError(EPERM)
+            raise FuseOSError(ENOENT)
 
     def statfs(self, path):
         return dict(f_bsize=512, f_blocks=4096, f_bavail=2048)
@@ -266,10 +275,11 @@ class SizeFSFuse(LoggingMixIn, Operations):
         raise FuseOSError(EPERM)
 
     def unlink(self, path):
-        if path in self.folders:
-            self.folders.pop(path)
+        if path in self.files:
+            del self.files[path]
+            del self.xattrs[path]
         else:
-            raise FuseOSError(EPERM)
+            raise FuseOSError(ENOENT)
 
     def utimens(self, path, times=None):
         pass
@@ -279,9 +289,9 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def __calculate_file_size__(self, regex_match):
         file_groupdict = regex_match.groupdict()
-        init_size = int(file_groupdict["size"])
+        init_size = float(file_groupdict["size"])
         size_unit = self.sizes[file_groupdict["size_si"]]
-        size = init_size * size_unit
+        size = int(init_size * size_unit)
 
         operator = file_groupdict["operator"]
         if operator is not None:
@@ -289,8 +299,9 @@ class SizeFSFuse(LoggingMixIn, Operations):
             shift_unit = self.sizes[file_groupdict["shift_si"]]
             shift_size = int(shift) * shift_unit
             if operator == "-":
-                shift_size = -shift_size
-            size += shift_size
+                size -= shift_size
+            elif operator == "+":
+                size += shift_size
 
         if size < 0:
             return 0
@@ -302,6 +313,15 @@ class SizeFSFuse(LoggingMixIn, Operations):
         return dict(st_mode=(S_IFREG | 0444), st_nlink=1,
                     st_size=size, st_ctime=time(),
                     st_mtime=time(), st_atime=time())
+
+    def __add_default_files__(self, path):
+        """
+        Add a set of example files to a directory (only for demo dirs)
+        """
+        for default_file in self.default_files:
+            attr = self.__file_attrs__(FILE_REGEX.match(default_file))
+            new_filepath = os.path.join(path, default_file)
+            self.files.setdefault(new_filepath, {"attrs": attr})
 
 
 if __name__ == '__main__':
