@@ -101,7 +101,7 @@ class XegerGen(object):
     reserved_chars = ['[', ']', '{', '}', '*', '+', '?']
 
     def __init__(self, size, filler=None, prefix=None,
-                 suffix=None, padder=None, max_random=128):
+                 suffix=None, padder=None, max_random=10):
         self.__size__ = size
         self.__end_last_read__ = 0
         self.__logger__ = logging.getLogger()
@@ -243,7 +243,7 @@ class Xeger(object):
     max_random - a value passed within the generator describing the maximum
                  number of repeats for * or + operators
     """
-    def __init__(self, regex, max_random=128):
+    def __init__(self, regex, max_random=10):
         self.__pattern__ = XegerPattern(regex, max_random=max_random)
 
     def generate(self):
@@ -264,7 +264,7 @@ class XegerPattern(object):
     This generates a list of top-level expressions that can be used to generate
     the contents of a file.
     """
-    def __init__(self, regex, max_random=128):
+    def __init__(self, regex, max_random=10):
         self.__max_random__ = max_random
         self.__parse_expressions__(regex)
 
@@ -295,7 +295,7 @@ class XegerExpression(object):
     """
     Parses an Expression from a list of input characters
     """
-    def __init__(self, regex_list, max_random=128):
+    def __init__(self, regex_list, max_random=10):
         self.__max_random__ = max_random
         self.__get_generator__(regex_list)
 
@@ -400,7 +400,7 @@ class XegerMultiplier(object):
     """
     Represents a multiplier
     """
-    def __init__(self, regex, max_random=128):
+    def __init__(self, regex, max_random=10):
         self.__max_random__ = max_random
         self.__get_multiplier__(regex)
 
