@@ -1,9 +1,9 @@
 __author__ = 'jjw'
 
-from sizefs import SizeFS
+from sizefs.sizefs import SizeFSFuse
 import re
 
-sfs = SizeFS()
+sfs = SizeFSFuse()
 
 def test_regex_dir():
     sfs.mkdir("/regex1")
