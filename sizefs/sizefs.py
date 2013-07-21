@@ -18,7 +18,7 @@ FILE_REGEX = re.compile("^(?P<size>[0-9]+(\.[0-9])?)(?P<size_si>[EPTGMKB])"
                         "((?P<operator>[\+|\-])(?P<shift>\d+)"
                         "(?P<shift_si>[EPTGMKB]))?$")
 
-DEBUG = False
+DEBUG = True
 
 if DEBUG:
     logging.debug("Starting SizeFS")
@@ -413,6 +413,6 @@ if __name__ == '__main__':
         exit(1)
 
     if DEBUG:
-        logging.setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
 
     fuse = FUSE(SizeFSFuse(), argv[1], foreground=False, auto_cache=True)
