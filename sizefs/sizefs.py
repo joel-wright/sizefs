@@ -26,14 +26,14 @@ if DEBUG:
 
 class SizeFSFuse(LoggingMixIn, Operations):
     """
-     Size Filesystem.
+    Size Filesystem.
 
-     Allows 1 level of folders to be created that have an xattr describing how
-     files should be filled (regex). Each directory contains a list of commonly
-     useful file sizes, however non-listed files of arbitrary size can be opened
-     and read from. The size spec comes from the filename, e.g.
+    Allows 1 level of folders to be created that have an xattr describing how
+    files should be filled (regex). Each directory contains a list of commonly
+    useful file sizes, however non-listed files of arbitrary size can be opened
+    and read from. The size spec comes from the filename, e.g.
 
-       open("/<folder>/1.1T-1B")
+      open("/<folder>/1.1T-1B")
     """
 
     #__metaclass__ = LogTheMethods
@@ -64,23 +64,23 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def chmod(self, path, mode):
         """
-         We'll return EPERM error to indicate that the user cannot change the
-         permissions of files/folders
+        We'll return EPERM error to indicate that the user cannot change the
+        permissions of files/folders
         """
         raise FuseOSError(EPERM)
 
     def chown(self, path, uid, gid):
         """
-         We'll return EPERM error to indicate that the user cannot change the
-         ownership of files/folders
+        We'll return EPERM error to indicate that the user cannot change the
+        ownership of files/folders
         """
         raise FuseOSError(EPERM)
 
     def create(self, path, mode):
         """
-         We'll return EPERM error to indicate that the user cannot create files
-         anywhere but within folders created to serve regex filled files, and
-         only with valid filenames
+        We'll return EPERM error to indicate that the user cannot create files
+        anywhere but within folders created to serve regex filled files, and
+        only with valid filenames
         """
         (folder, filename) = os.path.split(path)
 
@@ -124,9 +124,9 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def getattr(self, path, fh=None):
         """
-         Getattr either returns an attribute dict for a folder from the
-         self.folders map, or it returns a standard attribute dict for any valid
-         files
+        Getattr either returns an attribute dict for a folder from the
+        self.folders map, or it returns a standard attribute dict for any valid
+        files
         """
         if path in self.folders:
             return self.folders[path]
@@ -149,11 +149,15 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def getxattr(self, path, name, position=0):
         """
-         Returns an extended attribute of a file/folder
+        Returns an extended attribute of a file/folder
 
-         If the xattr does not exist we return ENODATA (synonymous with ENOATTR)
+        If the xattr does not exist we return ENODATA (synonymous with ENOATTR)
         """
-        print("get xattr: %s" % name)
+        if not name.startswith(u'user.'):
+            name = u'user.%s' % name
+        else:
+            name = u'%s' % name
+
         if path in self.xattrs:
             path_xattrs = self.xattrs[path]
             if name in path_xattrs:
@@ -163,15 +167,17 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def listxattr(self, path):
         """
-         Return a list of all extended attribute names for a file/folder
+        Return a list of all extended attribute names for a file/folder
         """
         path_xattrs = self.xattrs.get(path, {})
-        return path_xattrs
+        xattr_names = map(lambda xa: xa if xa.startswith(u'user.') else xa[5:],
+                          path_xattrs)
+        return xattr_names
 
     def mkdir(self, path, mode):
         """
-         Here we ignore the mode because we only allow 0444 directories to be
-         created
+        Here we ignore the mode because we only allow 0444 directories to be
+        created
         """
         (parent, folder) = os.path.split(path)
 
@@ -186,8 +192,8 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def open(self, path, flags):
         """
-         We check that a file exists in the file dictionary and return a
-         unique file descriptor if so
+        We check that a file exists in the file dictionary and return a
+        unique file descriptor if so
         """
         if not path in self.files:
             raise FuseOSError(ENOENT)
@@ -197,7 +203,7 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def read(self, path, size, offset, fh):
         """
-         Returns content based on the pattern of the containing folder
+        Returns content based on the pattern of the containing folder
         """
         if path in self.files:
             content = self.files[path]['generator'].read(offset, offset+size-1)
@@ -226,6 +232,11 @@ class SizeFSFuse(LoggingMixIn, Operations):
         return self.data[path]
 
     def removexattr(self, path, name):
+        if not name.startswith(u'user.'):
+            name = u'user.%s' % name
+        else:
+            name = u'%s' % name
+
         path_xattrs = self.xattrs[path]
 
         if name in path_xattrs:
@@ -283,6 +294,11 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def setxattr(self, path, name, value, options, position=0):
         # Ignore options
+
+        if not name.startswith(u'user.'):
+            name = u'user.%s' % name
+        else:
+            name = u'%s' % name
 
         if path in self.xattrs:
             path_xattrs = self.xattrs[path]
