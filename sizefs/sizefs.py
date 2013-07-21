@@ -18,7 +18,7 @@ FILE_REGEX = re.compile("^(?P<size>[0-9]+(\.[0-9])?)(?P<size_si>[EPTGMKB])"
                         "((?P<operator>[\+|\-])(?P<shift>\d+)"
                         "(?P<shift_si>[EPTGMKB]))?$")
 
-DEBUG = True
+DEBUG = False
 
 if DEBUG:
     logging.debug("Starting SizeFS")
@@ -412,5 +412,7 @@ if __name__ == '__main__':
         print('usage: %s <mountpoint>' % argv[0])
         exit(1)
 
-    logging.getLogger().setLevel(logging.DEBUG)
-    fuse = FUSE(SizeFSFuse(), argv[1], foreground=True, auto_cache=True)
+    if DEBUG:
+        logging.setLevel(logging.DEBUG)
+
+    fuse = FUSE(SizeFSFuse(), argv[1], foreground=False, auto_cache=True)

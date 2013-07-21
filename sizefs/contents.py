@@ -1,10 +1,10 @@
 import random
 import logging
 
-DEBUG = True
+DEBUG = False
 
 if DEBUG:
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.setLevel(logging.DEBUG)
 
 
 class FastRandom(object):
@@ -107,23 +107,22 @@ class XegerGen(object):
                  suffix=None, padder=None, max_random=10):
         self.__size__ = size
         self.__end_last_read__ = 0
-        self.__logger__ = logging.getLogger()
 
         if filler == "":
-            self.__logger__.error("Empty filler pattern supplied,"
-                                  " using default")
+            logging.error("Empty filler pattern supplied,"
+                          " using default")
             filler = None
         elif padder == "":
-            self.__logger__.error("Empty padder pattern supplied,"
-                                  " using default")
+            logging.error("Empty padder pattern supplied,"
+                          " using default")
             padder = None
         elif prefix == "":
-            self.__logger__.error("Empty prefix pattern supplied,"
-                                  " using default")
+            logging.error("Empty prefix pattern supplied,"
+                          " using default")
             prefix = None
         elif suffix == "":
-            self.__logger__.error("Empty suffix pattern supplied,"
-                                  " using default")
+            logging.error("Empty suffix pattern supplied,"
+                          " using default")
             suffix = None
 
         if filler is not None:
@@ -153,9 +152,9 @@ class XegerGen(object):
             self.__suffix_length__ = 0
 
         if size < (self.__prefix_length__ + self.__suffix_length__):
-            self.__logger__.error("Prefix and suffix combination is longer than"
-                                  "the requested size of the file. One or both will"
-                                  "be truncated")
+            logging.error("Prefix and suffix combination is longer than"
+                          "the requested size of the file. One or both will"
+                          "be truncated")
 
     def read(self, start, end):
         """
@@ -166,11 +165,11 @@ class XegerGen(object):
         appropriate output (this is necessary for metadata testing functions).
         """
         if end > self.__size__ - 1:
-            self.__logger__.error("Can't read past the end")
+            logging.error("Can't read past the end")
             end = self.__size__ - 1
 
         if start < 0:
-            self.__logger__.error("Can't read before the beginning")
+            logging.error("Can't read before the beginning")
             start = 0
 
         if not start == self.__end_last_read__ + 1:
@@ -485,8 +484,7 @@ class XegerSet(object):
 
     def __init__(self, regex):
         if DEBUG:
-            self.__logger__ = logging.getLogger()
-            self.__logger__.debug("Parsing Set from regex: %s" % "".join(regex))
+            logging.debug("Parsing Set from regex: %s" % "".join(regex))
         self.__parse_set__(regex)
 
     def __parse_set__(self, regex):
