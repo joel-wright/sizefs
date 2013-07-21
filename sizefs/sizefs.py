@@ -37,7 +37,7 @@ class SizeFSFuse(LoggingMixIn, Operations):
     """
 
     #__metaclass__ = LogTheMethods
-    default_files = ['4M', '4M-1B', '4M+1B']
+    default_files = ['100K', '4M', '4M-1B', '4M+1B']
     sizes = {'B': 1, 'K': 1024, 'M': 1024**2, 'G': 1024**3,
              'T': 1024**4, 'P': 1024**5, 'E': 1024**6}
 
@@ -53,13 +53,13 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
         # Create the default dirs (zeros, ones, common)
         self.mkdir('/zeros', (S_IFDIR | 0664))
-        self.setxattr('/zeros', "filler", "0", None)
+        self.setxattr('/zeros', u'user.filler', u'0', None)
         self.__add_default_files__('/zeros')
         self.mkdir('/ones', (S_IFDIR | 0664))
-        self.setxattr('/ones', "filler", "1", None)
+        self.setxattr('/ones', u'user.filler', u'1', None)
         self.__add_default_files__('/ones')
         self.mkdir('/alpha_num', (S_IFDIR | 0664))
-        self.setxattr('/alpha_num', "filler", "[a-zA-Z0-9]", None)
+        self.setxattr('/alpha_num', u'user.filler', u'[a-zA-Z0-9]', None)
         self.__add_default_files__('/alpha_num')
 
     def chmod(self, path, mode):
@@ -93,25 +93,34 @@ class SizeFSFuse(LoggingMixIn, Operations):
                 # Get the inherited xattrs from the containing folder and create
                 # the content generator
                 folder_xattrs = self.xattrs[folder]
-                filler = folder_xattrs.get("filler", None)
-                prefix = folder_xattrs.get("prefix", None)
-                suffix = folder_xattrs.get("suffix", None)
-                padder = folder_xattrs.get("padder", None)
-                max_random = int(folder_xattrs.get("max_random", None))
+                filler = folder_xattrs.get(u'user.filler', None)
+                prefix = folder_xattrs.get(u'user.prefix', None)
+                suffix = folder_xattrs.get(u'user.suffix', None)
+                padder = folder_xattrs.get(u'user.padder', None)
+                max_random = folder_xattrs.get(u'user.max_random', u'10')
+
+                self.xattrs[path] = {}
+                if filler is not None:
+                    self.setxattr(path, u'user.filler', filler, None)
+                if prefix is not None:
+                    self.setxattr(path, u'user.prefix', prefix, None)
+                if suffix is not None:
+                    self.setxattr(path, u'user.suffix', suffix, None)
+                if padder is not None:
+                    self.setxattr(path, u'user.padder', padder, None)
+                self.setxattr(path, u'user.max_random', max_random, None)
 
                 self.files[path] = {
                     'attrs': attrs,
-                    'generator': XegerGen(size_bytes,
-                                          filler=filler,
-                                          prefix=prefix,
-                                          suffix=suffix,
-                                          padder=padder,
-                                          max_random=max_random)
+                    'generator': self.__create_generator__(path, size_bytes)
                 }
             else:
                 raise FuseOSError(EPERM)
         else:
             raise FuseOSError(EPERM)
+
+        self.fd += 1
+        return self.fd
 
     def getattr(self, path, fh=None):
         """
@@ -144,6 +153,7 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
          If the xattr does not exist we return ENODATA (synonymous with ENOATTR)
         """
+        print("get xattr: %s" % name)
         if path in self.xattrs:
             path_xattrs = self.xattrs[path]
             if name in path_xattrs:
@@ -156,7 +166,7 @@ class SizeFSFuse(LoggingMixIn, Operations):
          Return a list of all extended attribute names for a file/folder
         """
         path_xattrs = self.xattrs.get(path, {})
-        return path_xattrs.keys()
+        return path_xattrs
 
     def mkdir(self, path, mode):
         """
@@ -171,7 +181,7 @@ class SizeFSFuse(LoggingMixIn, Operations):
         self.folders[path] = dict(st_mode=(S_IFDIR | 0664), st_nlink=2,
                                   st_size=0, st_ctime=time(), st_mtime=time(),
                                   st_atime=time())
-
+        self.xattrs[path] = {}
         self.folders['/']['st_nlink'] += 1
 
     def open(self, path, flags):
@@ -196,18 +206,21 @@ class SizeFSFuse(LoggingMixIn, Operations):
             raise FuseOSError(ENOENT)
 
     def readdir(self, path, fh):
-        folder_names = ['.', '..']
+        contents = ['.', '..']
 
         if path == "/":
             for folder_path in self.folders:
                 if not folder_path == "/":
                     (parent, folder_name) = os.path.split(folder_path)
                     if parent == path:
-                        folder_names.append(folder_name)
+                        contents.append(folder_name)
         else:
-            folder_names += self.default_files
+            for file_path in self.files:
+                if file_path.startswith(path):
+                    (folder, filename) = os.path.split(file_path)
+                    contents.append(filename)
 
-        return folder_names
+        return contents
 
     def readlink(self, path):
         return self.data[path]
@@ -217,7 +230,19 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
         if name in path_xattrs:
             del path_xattrs[name]
-            # update or create new generator
+        else:
+            raise FuseOSError(ENODATA)
+
+        if path in self.folders:
+            filenames = self.files.keys()
+            files_to_update = [filename for filename in filenames
+                               if filename.startswith(path)]
+            for file in files_to_update:
+                self.removexattr(file, name)
+        elif path in self.files:
+            size_bytes = self.files[path]['attrs']['st_size']
+            self.files[path]['generator'] =\
+                self.__create_generator__(path, size_bytes)
 
     def rename(self, old, new):
         """
@@ -258,12 +283,23 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
     def setxattr(self, path, name, value, options, position=0):
         # Ignore options
+
         if path in self.xattrs:
             path_xattrs = self.xattrs[path]
             path_xattrs[name] = value
-            # Update or create new generator
         else:
             raise FuseOSError(ENOENT)
+
+        if path in self.folders:
+            filenames = self.files.keys()
+            files_to_update = [filename for filename in filenames
+                               if filename.startswith(path)]
+            for file in files_to_update:
+                self.setxattr(file, name, value, options, position)
+        elif path in self.files:
+            size_bytes = self.files[path]['attrs']['st_size']
+            self.files[path]['generator'] =\
+                self.__create_generator__(path, size_bytes)
 
     def statfs(self, path):
         return dict(f_bsize=512, f_blocks=4096, f_bavail=2048)
@@ -319,10 +355,29 @@ class SizeFSFuse(LoggingMixIn, Operations):
         Add a set of example files to a directory (only for demo dirs)
         """
         for default_file in self.default_files:
-            attr = self.__file_attrs__(FILE_REGEX.match(default_file))
             new_filepath = os.path.join(path, default_file)
-            self.files.setdefault(new_filepath, {"attrs": attr})
+            self.create(new_filepath, 0444)
+            #attr = self.__file_attrs__(FILE_REGEX.match(default_file))
+            #self.files.setdefault(new_filepath, {"attrs": attr})
 
+    def __create_generator__(self, path, size_bytes):
+        """
+        Create a generator from xattr values
+        """
+        filler = self.xattrs[path].get(u'user.filler', None)
+        prefix = self.xattrs[path].get(u'user.prefix', None)
+        suffix = self.xattrs[path].get(u'user.suffix', None)
+        padder = self.xattrs[path].get(u'user.padder', None)
+        max_random = self.xattrs[path].get(u'user.max_random', u'10')
+
+        genr = XegerGen(size_bytes,
+                        filler=filler,
+                        prefix=prefix,
+                        suffix=suffix,
+                        padder=padder,
+                        max_random=int(max_random))
+
+        return genr
 
 if __name__ == '__main__':
     if len(argv) != 2:

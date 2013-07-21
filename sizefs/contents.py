@@ -6,6 +6,7 @@ DEBUG = True
 if DEBUG:
     logging.getLogger().setLevel(logging.DEBUG)
 
+
 class FastRandom(object):
     """
     random itself is too slow for our purposes, so we use random to populate
@@ -17,6 +18,7 @@ class FastRandom(object):
 
     This is faster and good enough for a "random" filler
     """
+
     def __init__(self, min, max, len=255):
         # Generate a small list of random numbers
         self.randoms = [random.randint(min, max) for i in range(len)]
@@ -36,6 +38,7 @@ class XegerError(Exception):
     """
     Exception type for reporting Xeger generation errors
     """
+
     def __init__(self, value):
         self.value = value
 
@@ -151,8 +154,8 @@ class XegerGen(object):
 
         if size < (self.__prefix_length__ + self.__suffix_length__):
             self.__logger__.error("Prefix and suffix combination is longer than"
-                              "the requested size of the file. One or both will"
-                              "be truncated")
+                                  "the requested size of the file. One or both will"
+                                  "be truncated")
 
     def read(self, start, end):
         """
@@ -164,9 +167,11 @@ class XegerGen(object):
         """
         if end > self.__size__ - 1:
             self.__logger__.error("Can't read past the end")
+            end = self.__size__ - 1
 
         if start < 0:
             self.__logger__.error("Can't read before the beginning")
+            start = 0
 
         if not start == self.__end_last_read__ + 1:
             # If we're not reading sequentially, get rid of any remainder
@@ -206,7 +211,7 @@ class XegerGen(object):
                 if len(more) > still_required:
                     overrun = len(more) - still_required
                     if (end + overrun) > (self.__size__ - 1 -
-                                          self.__suffix_length__):
+                                              self.__suffix_length__):
                         final = self.__get_padding__(still_required)
                         self.remainder = self.__get_padding__(overrun)
                     else:
@@ -243,6 +248,7 @@ class Xeger(object):
     max_random - a value passed within the generator describing the maximum
                  number of repeats for * or + operators
     """
+
     def __init__(self, regex, max_random=10):
         self.__pattern__ = XegerPattern(regex, max_random=max_random)
 
@@ -264,6 +270,7 @@ class XegerPattern(object):
     This generates a list of top-level expressions that can be used to generate
     the contents of a file.
     """
+
     def __init__(self, regex, max_random=10):
         self.__max_random__ = max_random
         self.__parse_expressions__(regex)
@@ -295,6 +302,7 @@ class XegerExpression(object):
     """
     Parses an Expression from a list of input characters
     """
+
     def __init__(self, regex_list, max_random=10):
         self.__max_random__ = max_random
         self.__get_generator__(regex_list)
@@ -400,6 +408,7 @@ class XegerMultiplier(object):
     """
     Represents a multiplier
     """
+
     def __init__(self, regex, max_random=10):
         self.__max_random__ = max_random
         self.__get_multiplier__(regex)
@@ -460,6 +469,7 @@ class XegerSequence(object):
     """
     Simple generator, just returns the sequence on each call to generate
     """
+
     def __init__(self, character_list):
         self.__sequence__ = "".join(character_list)
 
@@ -472,6 +482,7 @@ class XegerSet(object):
     Set generator, parses an input list for a set and returns a single element
     on each call to generate (generate_complete is identical)
     """
+
     def __init__(self, regex):
         if DEBUG:
             self.__logger__ = logging.getLogger()
