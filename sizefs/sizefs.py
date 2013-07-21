@@ -53,13 +53,13 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
         # Create the default dirs (zeros, ones, common)
         self.mkdir('/zeros', (S_IFDIR | 0664))
-        self.setxattr('/zeros', u'user.filler', u'0', None)
+        self.setxattr('/zeros', u'user.filler', '0', None)
         self.__add_default_files__('/zeros')
         self.mkdir('/ones', (S_IFDIR | 0664))
-        self.setxattr('/ones', u'user.filler', u'1', None)
+        self.setxattr('/ones', u'user.filler', '1', None)
         self.__add_default_files__('/ones')
         self.mkdir('/alpha_num', (S_IFDIR | 0664))
-        self.setxattr('/alpha_num', u'user.filler', u'[a-zA-Z0-9]', None)
+        self.setxattr('/alpha_num', u'user.filler', '[a-zA-Z0-9]', None)
         self.__add_default_files__('/alpha_num')
 
     def chmod(self, path, mode):
@@ -241,6 +241,10 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
         if name in path_xattrs:
             del path_xattrs[name]
+            self.__update_mtime__()
+        if not name in self.xattrs[path]:
+            return
+
         else:
             raise FuseOSError(ENODATA)
 
@@ -295,13 +299,17 @@ class SizeFSFuse(LoggingMixIn, Operations):
     def setxattr(self, path, name, value, options, position=0):
         # Ignore options
 
-        if not name.startswith(u'user.'):
+        if not '.' in name and not name.startswith(u'user.'):
             name = u'user.%s' % name
         else:
             name = u'%s' % name
 
         if path in self.xattrs:
             path_xattrs = self.xattrs[path]
+            if name in path_xattrs and value == path_xattrs[name]:
+                return
+            else:
+                self.__update_mtime__(path)
             path_xattrs[name] = value
         else:
             raise FuseOSError(ENOENT)
@@ -312,6 +320,7 @@ class SizeFSFuse(LoggingMixIn, Operations):
                                if filename.startswith(path)]
             for file in files_to_update:
                 self.setxattr(file, name, value, options, position)
+
         elif path in self.files:
             size_bytes = self.files[path]['attrs']['st_size']
             self.files[path]['generator'] =\
@@ -366,6 +375,12 @@ class SizeFSFuse(LoggingMixIn, Operations):
                     st_size=size, st_ctime=time(),
                     st_mtime=time(), st_atime=time())
 
+    def __update_mtime__(self, path):
+        if path in self.folders:
+            self.folders[path]['st_mtime'] = time()
+        elif path in self.files:
+            self.files[path]['attrs']['st_mtime'] = time()
+
     def __add_default_files__(self, path):
         """
         Add a set of example files to a directory (only for demo dirs)
@@ -401,4 +416,4 @@ if __name__ == '__main__':
         exit(1)
 
     logging.getLogger().setLevel(logging.DEBUG)
-    fuse = FUSE(SizeFSFuse(), argv[1], foreground=True)
+    fuse = FUSE(SizeFSFuse(), argv[1], foreground=True, auto_cache=True)
