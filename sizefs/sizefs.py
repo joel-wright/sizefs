@@ -241,7 +241,7 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
         if name in path_xattrs:
             del path_xattrs[name]
-            self.__update_mtime__()
+            self.__update_mtime__(path)
         else:
             raise FuseOSError(ENODATA)
 
