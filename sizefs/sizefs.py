@@ -242,15 +242,12 @@ class SizeFSFuse(LoggingMixIn, Operations):
         if name in path_xattrs:
             del path_xattrs[name]
             self.__update_mtime__()
-        if not name in self.xattrs[path]:
-            return
-
         else:
             raise FuseOSError(ENODATA)
 
         if path in self.folders:
-            filenames = self.files.keys()
-            files_to_update = [filename for filename in filenames
+            file_names = self.files.keys()
+            files_to_update = [filename for filename in file_names
                                if filename.startswith(path)]
             for file in files_to_update:
                 self.removexattr(file, name)

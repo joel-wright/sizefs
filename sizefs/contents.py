@@ -185,7 +185,7 @@ class XegerGen(object):
         else:
             content = self.remainder
 
-        chunk_size = end - start
+        chunk_size = end - start + 1
 
         # This look horrendous
         # TODO: tidy up the read logic
