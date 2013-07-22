@@ -135,6 +135,6 @@ Mac Mounting - http://osxfuse.github.com/
 
 From the command line:
 
-   python ./sizefs.py <mount_point>
+    > python ./sizefs.py <mount_point>
 
 
