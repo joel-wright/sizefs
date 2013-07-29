@@ -164,6 +164,9 @@ class XegerGen(object):
         end range within a specified prefix or suffix pattern will produce
         appropriate output (this is necessary for metadata testing functions).
         """
+        content = []
+        content_length = 0
+
         if end > self.__size__ - 1:
             logging.error("Can't read past the end")
             end = self.__size__ - 1
@@ -172,17 +175,18 @@ class XegerGen(object):
             logging.error("Can't read before the beginning")
             start = 0
 
-        if not start == self.__end_last_read__ + 1:
-            # If we're not reading sequentially, get rid of any remainder
-            self.remainder = ""
-
         self.__end_last_read__ = end
 
         if start < self.__prefix_length__:
-            self.remainder = ""
-            content = self.__prefix__[start:]
+            self.__remainder__ = ""
+            self.__remainder_length__ = 0
+            content.append(self.__prefix__[start:])
+            content_length += self.__prefix_length__ - start
         else:
-            content = self.remainder
+            if start == self.__end_last_read__ + 1:
+                # If we're reading sequentially, append any remainder
+                content.append(self.__remainder__)
+                content_length += self.__remainder_length__
 
         chunk_size = end - start + 1
 
@@ -192,7 +196,7 @@ class XegerGen(object):
             # If we're sufficiently close to the end size of the contents
             # requested, then we need to consider padding and suffix
             last = self.__suffix__[:self.__suffix_length__ +
-                                    (end - (self.__size__ - 1))]
+                                   (end - (self.__size__ - 1))]
             while len(content) < (chunk_size - len(last)):
                 more = self.__get_filler__()
                 still_required = chunk_size - len(content) - len(last)
@@ -212,12 +216,12 @@ class XegerGen(object):
                     if (end + overrun) > (self.__size__ - 1 -
                                               self.__suffix_length__):
                         final = self.__get_padding__(still_required)
-                        self.remainder = self.__get_padding__(overrun)
+                        self.__remainder__ = self.__get_padding__(overrun)
                     else:
                         if (end + overrun) > self.__size__ - 1:
                             final = self.__get_padding__(still_required)
                         else:
-                            self.remainder = more[still_required:]
+                            self.__remainder__ = more[still_required:]
                             final = more[:still_required]
                     content += final
                 else:
