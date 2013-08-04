@@ -165,7 +165,8 @@ class XegerGen(object):
         appropriate output (this is necessary for metadata testing functions).
         """
         if end > self.__size__ - 1:
-            logging.error("Can't read past the end")
+            logging.debug("Read beyond end of generator requested - resetting"
+                          "requested end to size of generator")
             end = self.__size__ - 1
 
         if start < 0:
