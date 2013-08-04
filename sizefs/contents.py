@@ -138,15 +138,17 @@ class XegerGen(object):
         self.__padder_gen__ = self.__padder__.generate()
 
         if prefix is not None:
-            self.__prefix__ = Xeger(prefix, max_random).generate_complete()
-            self.__prefix_length__ = len(self.__prefix__)
+            prefix, prefix_len = Xeger(prefix, max_random).generate_complete()
+            self.__prefix__ = prefix
+            self.__prefix_length__ = prefix_len
         else:
             self.__prefix__ = ""
             self.__prefix_length__ = 0
 
         if suffix is not None:
-            self.__suffix__ = Xeger(suffix, max_random).generate_complete()
-            self.__suffix_length__ = len(self.__suffix__)
+            suffix, suffix_len = Xeger(suffix, max_random).generate_complete()
+            self.__suffix__ = suffix
+            self.__suffix_length__ = suffix_len
         else:
             self.__suffix__ = ""
             self.__suffix_length__ = 0
@@ -187,57 +189,71 @@ class XegerGen(object):
                 # If we're reading sequentially, append any remainder
                 content.append(self.__remainder__)
                 content_length += self.__remainder_length__
+                self.__remainder__ = ""
+                self.__remainder_length__ = 0
 
         chunk_size = end - start + 1
 
         # This look horrendous
         # TODO: tidy up the read logic
+        # TODO: use length accumulator values
         if end > (self.__size__ - self.__suffix_length__):
             # If we're sufficiently close to the end size of the contents
             # requested, then we need to consider padding and suffix
             last = self.__suffix__[:self.__suffix_length__ +
                                    (end - (self.__size__ - 1))]
-            while len(content) < (chunk_size - len(last)):
-                more = self.__get_filler__()
-                still_required = chunk_size - len(content) - len(last)
-                if len(more) > still_required:
-                    pad = self.__get_padding__(still_required)
-                    content += pad
+            last_len = len(last)
+            while content_length < (chunk_size - last_len):
+                more, more_length = self.__get_filler__()
+                still_required = chunk_size - content_length - last_len
+                if more_length > still_required:
+                    pad, pad_length = self.__get_padding__(still_required)
+                    content.append(pad)
+                    content_length += pad_length
                 else:
-                    content += more
-            content += last
-            return content
+                    content.append(more)
+                    content_length += more_length
+            content.append(last)
+            return "".join(content)
         else:
-            while len(content) < chunk_size:
-                more = self.__get_filler__()
-                still_required = chunk_size - len(content)
-                if len(more) > still_required:
-                    overrun = len(more) - still_required
+            while content_length < chunk_size:
+                more, more_length = self.__get_filler__()
+                still_required = chunk_size - content_length
+                if more_length > still_required:
+                    overrun = more_length - still_required
                     if (end + overrun) > (self.__size__ - 1 -
-                                              self.__suffix_length__):
-                        final = self.__get_padding__(still_required)
+                                          self.__suffix_length__):
+                        final, final_length =\
+                            self.__get_padding__(still_required)
                         self.__remainder__ = self.__get_padding__(overrun)
                     else:
                         if (end + overrun) > self.__size__ - 1:
-                            final = self.__get_padding__(still_required)
+                            final, final_length =\
+                                self.__get_padding__(still_required)
                         else:
                             self.__remainder__ = more[still_required:]
+                            self.__remainder_length__ =\
+                                more_length - still_required
                             final = more[:still_required]
-                    content += final
+                            final_length = len(final)
+                    content.append(final)
+                    content_length += final_length
                 else:
-                    content += more
-            return content
+                    content.append(more)
+                    content_length += more_length
+            return "".join(content)
 
     def __get_padding__(self, size):
         pad = []
         pad_length = 0
 
         while pad_length < size:
-            pad_content = self.__padder__.generate_complete()
+            pad_content, pad_content_length =\
+                self.__padder__.generate_complete()
             pad.append(pad_content)
-            pad_length += len(pad_content)
+            pad_length += pad_content_length
 
-        return "".join(pad)[:size]
+        return "".join(pad)[:size], size
 
     def __get_filler__(self):
         return self.__filler__.generate_complete()
@@ -256,14 +272,16 @@ class Xeger(object):
         self.__pattern__ = XegerPattern(regex, max_random=max_random)
 
     def generate(self):
-        for content in self.__pattern__.generate():
-            yield content
+        for content, content_length in self.__pattern__.generate():
+            yield content, content_length
 
     def generate_complete(self):
         generated_content = []
-        for pattern_content in self.generate():
+        generated_content_length = 0
+        for pattern_content, pattern_content_length in self.generate():
             generated_content.append(pattern_content)
-        return "".join(generated_content)
+            generated_content_length += pattern_content_length
+        return "".join(generated_content), generated_content_length
 
 
 class XegerPattern(object):
@@ -290,15 +308,17 @@ class XegerPattern(object):
 
     def generate(self):
         for expression in self.__expressions__:
-            for ex in expression.generate():
-                yield ex
+            for ex, ex_len in expression.generate():
+                yield ex, ex_len
 
     def generate_complete(self):
         generated_content = []
+        generated_content_length = 0
         for expression in self.__expressions__:
-            for expression_content in expression.generate():
+            for expression_content, expression_length in expression.generate():
                 generated_content.append(expression_content)
-        return "".join(generated_content)
+                generated_content_length += expression_length
+        return "".join(generated_content), generated_content_length
 
 
 class XegerExpression(object):
@@ -395,6 +415,7 @@ class XegerExpression(object):
 
     def generate(self):
         content = []
+        content_length = 0
 
         if self.__constant_multiplier__:
             mult = self.__multiplier__
@@ -402,9 +423,11 @@ class XegerExpression(object):
             mult = self.__multiplier__.value()
 
         for x in range(mult):
-            content += self.__generator__.generate_complete()
+            new_content, new_con_length = self.__generator__.generate_complete()
+            content.append(new_content)
+            content_length += new_con_length
 
-        yield "".join(content)
+        yield "".join(content), content_length
 
 
 class XegerMultiplier(object):
@@ -475,15 +498,16 @@ class XegerSequence(object):
 
     def __init__(self, character_list):
         self.__sequence__ = "".join(character_list)
+        self.__sequence_length__ = len(self.__sequence__)
 
     def generate_complete(self):
-        return self.__sequence__
+        return self.__sequence__, self.__sequence_length__
 
 
 class XegerSet(object):
     """
     Set generator, parses an input list for a set and returns a single element
-    on each call to generate (generate_complete is identical)
+    on each call to generate_complete
     """
 
     def __init__(self, regex):
@@ -534,6 +558,6 @@ class XegerSet(object):
             yield chr(c)
 
     def generate_complete(self):
-        return self.__set__[self.__random__.rand()]
+        return self.__set__[self.__random__.rand()], 1
 
 
