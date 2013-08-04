@@ -414,5 +414,6 @@ if __name__ == '__main__':
 
     if DEBUG:
         logging.getLogger().setLevel(logging.DEBUG)
-
-    fuse = FUSE(SizeFSFuse(), argv[1], foreground=False, auto_cache=True)
+        fuse = FUSE(SizeFSFuse(), argv[1], foreground=True, auto_cache=True)
+    else:
+        fuse = FUSE(SizeFSFuse(), argv[1], foreground=True, auto_cache=True)

@@ -107,6 +107,8 @@ class XegerGen(object):
                  suffix=None, padder=None, max_random=10):
         self.__size__ = size
         self.__end_last_read__ = 0
+        self.__remainder__ = ""
+        self.__remainder_length__ = 0
 
         if filler == "":
             logging.error("Empty filler pattern supplied,"
