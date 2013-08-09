@@ -72,16 +72,16 @@ class XegerGen(object):
       <Xeger> ::= <Pattern>
 
       <Pattern> ::= <Expression>
-                | <Expression> <Pattern>
+                  | <Expression> <Pattern>
 
       <Expression> ::= <Char> [<Multiplier>]
-                   | "(" <Pattern> ")" [<Multiplier>]
-                   | "[" <Set> "]" [<Multiplier>]
+                     | "(" <Pattern> ")" [<Multiplier>]
+                     | "[" <Set> "]" [<Multiplier>]
 
       <Multiplier> ::= "*"
-                   | "+"
-                   | "?"
-                   | '{' <Num> '}'
+                     | "+"
+                     | "?"
+                     | '{' <Num> '}'
 
       <Set> ::= <Char>
               | <Char> "-" <Char>
@@ -157,6 +157,8 @@ class XegerGen(object):
             logging.error("Prefix and suffix combination is longer than"
                           "the requested size of the file. One or both will"
                           "be truncated")
+
+        self.__get_filler__ = self.__filler__.generate
 
     def read(self, start, end):
         """
@@ -253,9 +255,6 @@ class XegerGen(object):
 
         return "".join(pad)[:size], size
 
-    def __get_filler__(self):
-        return self.__filler__.generate()
-
 
 class Xeger(object):
     """
@@ -268,6 +267,8 @@ class Xeger(object):
 
     def __init__(self, regex, max_random=10):
         self.__pattern__ = XegerPattern(regex, max_random=max_random)
+        if self.__pattern__.length() == 1:
+            self.__pattern__ = self.__pattern__.__expressions__[0]
 
     def generate(self):
         generated_content, generated_content_length = \
@@ -292,8 +293,10 @@ class XegerPattern(object):
         regex_list = list(regex)
         while regex_list:
             expression = XegerExpression(regex_list, self.__max_random__)
-            self.__expressions__.append(expression)
-        self.__multiple_expressions__ = len(self.__expressions__) > 1
+            if expression.__multiplier__ is None:
+                self.__expressions__.append(expression.__generator__)
+            else:
+                self.__expressions__.append(expression)
 
     def length(self):
         return len(self.__expressions__)
@@ -301,15 +304,12 @@ class XegerPattern(object):
     def generate(self):
         generated_content = []
         generated_content_length = 0
-        if self.__multiple_expressions__:
-            for expression in self.__expressions__:
-                expression_content, expression_content_length = \
-                    expression.generate()
-                generated_content.append(expression_content)
-                generated_content_length += expression_content_length
-                return "".join(generated_content), generated_content_length
-        else:
-            return self.__expressions__[0].generate()
+        for expression in self.__expressions__:
+            expression_content, expression_content_length = \
+                expression.generate()
+            generated_content.append(expression_content)
+            generated_content_length += expression_content_length
+        return "".join(generated_content), generated_content_length
 
 
 class XegerExpression(object):
@@ -377,8 +377,8 @@ class XegerExpression(object):
 
         if accum:  # If there's anything left in the accumulator, must be chars
             self.__generator__ = XegerSequence(accum)
-            self.__constant_multiplier__ = True
-            self.__multiplier__ = 1
+            self.__constant_multiplier__ = None
+            self.__multiplier__ = None
 
     def __is_constant_multiplier__(self):
         if not self.__multiplier__.is_random:
@@ -412,20 +412,20 @@ class XegerExpression(object):
         content = []
         content_length = 0
 
-        if self.__constant_multiplier__ is not None:
+        # self.__multiplier__ & self.__constant_multiplier__
+        # are guaranteed to be set if generate() is called
+        if self.__constant_multiplier__:
             mult = self.__multiplier__
             for x in range(mult):
                 new_content, new_con_length = self.__generator__.generate()
                 content.append(new_content)
                 content_length += new_con_length
-        elif self.__multiplier__ is not None:
+        else:
             mult = self.__multiplier__.value()
             for x in range(mult):
                 new_content, new_con_length = self.__generator__.generate()
                 content.append(new_content)
                 content_length += new_con_length
-        else:
-            return self.__generator__.generate()
 
         return "".join(content), content_length
 
