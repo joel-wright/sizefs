@@ -18,7 +18,6 @@ class FastRandom(object):
 
     This is faster and good enough for a "random" filler
     """
-
     def __init__(self, min, max, len=255):
         # Generate a small list of random numbers
         self.randoms = [random.randint(min, max) for i in range(len)]
@@ -38,7 +37,6 @@ class XegerError(Exception):
     """
     Exception type for reporting Xeger generation errors
     """
-
     def __init__(self, value):
         self.value = value
 
@@ -202,34 +200,37 @@ class XegerGen(object):
         if end > (self.__size__ - self.__suffix_length__):
             # If we're sufficiently close to the end size of the contents
             # requested, then we need to consider padding and suffix
+            last_required = True
             last = self.__suffix__[:self.__suffix_length__ +
                                    (end - (self.__size__ - 1))]
-            last_required = True
             still_required = chunk_size - content_length - len(last)
         else:
             still_required = chunk_size - content_length
 
         # Grab content
         while content_length < still_required:
-            more, more_length = self.__get_filler__()
-            content.append(more)
-            content_length += more_length
+            new_items, content_length = \
+                self.__get_filler__(content, content_length)
 
         # Adjust content and get padding if necessary
         if content_length > still_required:
             overrun = content_length - still_required
-            overrun_content = content.pop()
+            overrun_content = []
+            for x in xrange(new_items):
+                overrun_content.insert(0, content.pop())
+            overrun_content_string = "".join(overrun_content)
+            overrun_length = len(overrun_content_string)
             if (end + overrun) > (self.__size__ - 1 - self.__suffix_length__):
-                content_length -= more_length
+                content_length -= overrun_length
                 padding_required = still_required - content_length
                 pad, pad_length = self.__get_padding__(padding_required)
                 content.append(pad)
                 if last_required:
                     content.append(last)
             else:
-                this_time = len(overrun_content) - overrun
-                content.append(overrun_content[:this_time])
-                self.__remainder__ = overrun_content[this_time:]
+                this_time = overrun_length - overrun
+                content.append(overrun_content_string[:this_time])
+                self.__remainder__ = overrun_content_string[this_time:]
                 self.__remainder_length__ = overrun
 
         return "".join(content)
@@ -239,10 +240,8 @@ class XegerGen(object):
         pad_length = 0
 
         while pad_length < size:
-            pad_content, pad_content_length =\
-                self.__padder__.generate()
-            pad.append(pad_content)
-            pad_length += pad_content_length
+            new_items, pad_length = \
+                self.__padder__.generate(pad, pad_length)
 
         return "".join(pad)[:size], size
 
@@ -255,16 +254,12 @@ class Xeger(object):
     max_random - a value passed within the generator describing the maximum
                  number of repeats for * or + operators
     """
-
     def __init__(self, regex, max_random=10):
         self.__pattern__ = XegerPattern(regex, max_random=max_random)
         if self.__pattern__.length() == 1:
             self.__pattern__ = self.__pattern__.__expressions__[0]
 
-    def generate(self):
-        generated_content, generated_content_length = \
-            self.__pattern__.generate()
-        return "".join(generated_content), generated_content_length
+        self.generate = self.__pattern__.generate
 
 
 class XegerPattern(object):
@@ -274,7 +269,6 @@ class XegerPattern(object):
     This generates a list of top-level expressions that can be used to generate
     the contents of a file.
     """
-
     def __init__(self, regex, max_random=10):
         self.__max_random__ = max_random
         self.__parse_expressions__(regex)
@@ -292,22 +286,20 @@ class XegerPattern(object):
     def length(self):
         return len(self.__expressions__)
 
-    def generate(self):
-        generated_content = []
-        generated_content_length = 0
+    def generate(self, generated_content, generated_content_length):
+        new_item_count = 0
         for expression in self.__expressions__:
-            expression_content, expression_content_length = \
-                expression.generate()
-            generated_content.append(expression_content)
-            generated_content_length += expression_content_length
-        return "".join(generated_content), generated_content_length
+            new_items, generated_content_length = \
+                expression.generate(generated_content,
+                                    generated_content_length)
+            new_item_count += new_items
+        return new_item_count, generated_content_length
 
 
 class XegerExpression(object):
     """
     Parses an Expression from a list of input characters
     """
-
     def __init__(self, regex_list, max_random=10):
         self.__max_random__ = max_random
         self.__get_generator__(regex_list)
@@ -399,33 +391,32 @@ class XegerExpression(object):
 
         raise XegerError("Incomplete expression")
 
-    def generate(self):
-        content = []
-        content_length = 0
-
+    def generate(self, generated_content, generated_content_length):
         # self.__multiplier__ & self.__constant_multiplier__
         # are guaranteed to be set if generate() is called
+        new_item_count = 0
         if self.__constant_multiplier__:
             mult = self.__multiplier__
-            for x in range(mult):
-                new_content, new_con_length = self.__generator__.generate()
-                content.append(new_content)
-                content_length += new_con_length
+            for x in xrange(mult):
+                new_items, generated_content_length = \
+                    self.__generator__.generate(generated_content,
+                                                generated_content_length)
+                new_item_count += new_items
         else:
             mult = self.__multiplier__.value()
-            for x in range(mult):
-                new_content, new_con_length = self.__generator__.generate()
-                content.append(new_content)
-                content_length += new_con_length
+            for x in xrange(mult):
+                new_items, generated_content_length = \
+                    self.__generator__.generate(generated_content,
+                                                generated_content_length)
+                new_item_count = new_items
 
-        return "".join(content), content_length
+        return new_item_count, generated_content_length
 
 
 class XegerMultiplier(object):
     """
     Represents a multiplier
     """
-
     def __init__(self, regex, max_random=10):
         self.__max_random__ = max_random
         self.__get_multiplier__(regex)
@@ -486,13 +477,14 @@ class XegerSequence(object):
     """
     Simple generator, just returns the sequence on each call to generate
     """
-
     def __init__(self, character_list):
         self.__sequence__ = "".join(character_list)
         self.__sequence_length__ = len(self.__sequence__)
 
-    def generate(self):
-        return self.__sequence__, self.__sequence_length__
+    def generate(self, generated_content, generated_content_length):
+        generated_content.append(self.__sequence__)
+        generated_content_length += self.__sequence_length__
+        return 1, generated_content_length
 
 
 class XegerSet(object):
@@ -500,7 +492,6 @@ class XegerSet(object):
     Set generator, parses an input list for a set and returns a single element
     on each call to generate
     """
-
     def __init__(self, regex):
         if DEBUG:
             logging.debug("Parsing Set from regex: %s" % "".join(regex))
@@ -547,7 +538,8 @@ class XegerSet(object):
     def __char_range__(self, a, b):
         return [chr(c) for c in range(ord(a), ord(b)-1)]
 
-    def generate(self):
-        return self.__set__[self.__random__.rand()], 1
+    def generate(self, generated_content, generated_content_length):
+        generated_content.append(self.__set__[self.__random__.rand()])
+        return 1, generated_content_length + 1
 
 
