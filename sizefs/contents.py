@@ -197,51 +197,42 @@ class XegerGen(object):
 
         chunk_size = end - start + 1
 
+        # Calculate how much content is required
+        last_required = False
         if end > (self.__size__ - self.__suffix_length__):
             # If we're sufficiently close to the end size of the contents
             # requested, then we need to consider padding and suffix
             last = self.__suffix__[:self.__suffix_length__ +
                                    (end - (self.__size__ - 1))]
-            last_len = len(last)
-            while content_length < (chunk_size - last_len):
-                more, more_length = self.__get_filler__()
-                still_required = chunk_size - content_length - last_len
-                if more_length > still_required:
-                    pad, pad_length = self.__get_padding__(still_required)
-                    content.append(pad)
-                    content_length += pad_length
-                else:
-                    content.append(more)
-                    content_length += more_length
-            content.append(last)
-            return "".join(content)
+            last_required = True
+            still_required = chunk_size - content_length - len(last)
         else:
-            while content_length < chunk_size:
-                more, more_length = self.__get_filler__()
-                still_required = chunk_size - content_length
-                if more_length > still_required:
-                    overrun = more_length - still_required
-                    if (end + overrun) > (self.__size__ - 1 -
-                                          self.__suffix_length__):
-                        final, final_length =\
-                            self.__get_padding__(still_required)
-                        self.__remainder__ = self.__get_padding__(overrun)
-                    else:
-                        if (end + overrun) > self.__size__ - 1:
-                            final, final_length =\
-                                self.__get_padding__(still_required)
-                        else:
-                            self.__remainder__ = more[still_required:]
-                            self.__remainder_length__ =\
-                                more_length - still_required
-                            final = more[:still_required]
-                            final_length = len(final)
-                    content.append(final)
-                    content_length += final_length
-                else:
-                    content.append(more)
-                    content_length += more_length
-            return "".join(content)
+            still_required = chunk_size - content_length
+
+        # Grab content
+        while content_length < still_required:
+            more, more_length = self.__get_filler__()
+            content.append(more)
+            content_length += more_length
+
+        # Adjust content and get padding if necessary
+        if content_length > still_required:
+            overrun = content_length - still_required
+            overrun_content = content.pop()
+            if (end + overrun) > (self.__size__ - 1 - self.__suffix_length__):
+                content_length -= more_length
+                padding_required = still_required - content_length
+                pad, pad_length = self.__get_padding__(padding_required)
+                content.append(pad)
+                if last_required:
+                    content.append(last)
+            else:
+                this_time = len(overrun_content) - overrun
+                content.append(overrun_content[:this_time])
+                self.__remainder__ = overrun_content[this_time:]
+                self.__remainder_length__ = overrun
+
+        return "".join(content)
 
     def __get_padding__(self, size):
         pad = []
