@@ -10,6 +10,7 @@ from time import time
 
 import re
 import os
+import pyximport; pyximport.install()
 from contents import XegerGen
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
