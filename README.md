@@ -9,6 +9,96 @@ For example, reading a file named 128M+1B will return a file of 128 Megabytes
 plus 1 byte, reading a file named 128M-1B will return a file of 128 Megabytes
 minus 1 byte
 
+Example Usage
+--------------
+
+Create Size File objects in memory:
+
+    > from sizefs import SizeFS
+    > sfs = SizeFS()
+    > sfs.get_size_file('1B').read(0, 1)
+    > sfs.get_size_file('2B').read(0, 2)
+    > sfs.get_size_file('1K').read(0, 1024)
+    > sfs.get_size_file('128KB').read(0, 100))
+
+The folder structure is used to determine the content of the files:
+
+    > sfs.get_size_file('/zeros/5B').read(0, 5)
+    out> 00000
+
+    > sfs.get_size_file('/ones/5B').read(0, 5)
+    out> 11111
+
+    > sfs.get_size_file('/alpha_num/5B').read(0, 5)
+    out> TMdEv
+
+Folders can be created to manipulate the data:
+
+    > sfs.mkdir('/regex1', None)
+    > sfs.setxattr('/regex1', 'filler', '0', None)
+    > print sfs.get_size_file('/alpha_num/5B').read(0, 5)
+
+    out> 00000
+
+    > sfs.mkdir('/regex2', None)
+    > sfs.setxattr('/regex2', 'filler', '1', None)
+    > print sfs.get_size_file('/regex2/5B').read(0, 5)
+
+    out> 11111
+
+    > sfs.mkdir('/regex3', None)
+    > sfs.setxattr('/regex3', 'filler', '[a-zA-Z0-9]', None)
+    > print sfs.get_size_file('/regex3/5B').read(0, 5)
+
+    out> 1JAbd
+
+Files can be added to SizeFS using sfs.create ::
+
+    > sfs.mkdir('/regex3', None)
+    > sfs.setxattr('/regex3', 'filler', '[a-zA-Z0-9]', None)
+    > sfs.create('/regex3/5B', None)
+    > print sfs.read('/regex3/5B', 5, 0, None)
+
+    out> aS8yG
+
+    > sfs.create('/regex3/128K', None)
+    > print len(sfs.read('/regex3/128K', 128*1024, 0, None))
+
+    out> 131072
+
+    > sfs.create('/regex3/128K-1B', None)
+    > print len(sfs.read('/regex3/128K-1B', 128*1024, 0, None))
+
+    out> 131071
+
+    > sfs.create('/regex3/128K+1B', None)
+    > print len(sfs.read('/alphanum/128K+1B', 128*1024+1, 0, None))
+
+    out> 131073
+
+File content can be generated that matches a regex pattern by adding a directory
+
+    > sfs.mkdir('/regex1')
+    > sfs.setxattr('/regex1','filler','a(bcd)*e{4}[a-z03]*')
+    > sfs.create('/regex1','128K')
+    > print len(sfs.open('regex1/128KB').read(0, 128*1024))
+
+    out> 131072
+
+    > sfs.create('/regex1','128K-1B')
+    > print len(sfs.open('regex1/128K-1B').read(0, 128*1024-1))
+
+    out> 131071
+
+    > sfs.create('/regex1','128K+1B')
+    > print len(sfs.open('regex1/128KB+1B').read(0, 128*1024+1))
+
+    out> 131073
+
+
+Extended Usage
+--------------
+
 We can set up to 5 properties:
 
     prefix     - defined pattern for the start of a file (default = "")
@@ -61,72 +151,6 @@ Random seeks within a file may produce inconsistent results for general file
 contents, however prefix and suffix will always be consistent with the requested
 pattern.
 
-Example Programmatic Usage
---------------------------
-
-Create sizefs filesystem object in memory:
-
-    > from sizefs.sizefs import SizeFSFuse
-    > sfs = SizeFSFuse()
-
-The folder structure is used to determine the content of the files:
-
-    > sfs.mkdir('/regex1', None)
-    > sfs.setxattr('/regex1', 'filler', '0', None)
-    > sfs.create('/regex1/5B', None)
-    > print sfs.read('/regex1/5B', 5, 0, None)
-
-    out> 00000
-
-    > sfs.mkdir('/regex2', None)
-    > sfs.setxattr('/regex2', 'filler', '1', None)
-    > sfs.create('/regex2/5B', None)
-    > print sfs.read('/regex2/5B', 5, 0, None)
-
-    out> 11111
-
-File content can be random alphanumeric data::
-
-    > sfs.mkdir('/regex3', None)
-    > sfs.setxattr('/regex3', 'filler', '[a-zA-Z0-9]', None)
-    > sfs.create('/regex3/5B', None)
-    > print sfs.read('/regex3/5B', 5, 0, None)
-
-    out> aS8yG
-
-    > sfs.create('/regex3/128K', None)
-    > print len(sfs.read('/regex3/128K', 128*1024, 0, None))
-
-    out> 131072
-
-    > sfs.create('/regex3/128K-1B', None)
-    > print len(sfs.read('/regex3/128K-1B', 128*1024, 0, None))
-
-    out> 131071
-
-    > sfs.create('/regex3/128K+1B', None)
-    > print len(sfs.read('/alphanum/128K+1B', 128*1024+1, 0, None))
-
-    out> 131073
-
-File content can be generated that matches a regex pattern by adding a directory
-
-    > sfs.mkdir('/regex1')
-    > sfs.setxattr('/regex1','filler','a(bcd)*e{4}[a-z03]*')
-    > sfs.create('/regex1','128K')
-    > print len(sfs.open('regex1/128KB').read(0, 128*1024))
-
-    out> 131072
-
-    > sfs.create('/regex1','128K-1B')
-    > print len(sfs.open('regex1/128K-1B').read(0, 128*1024-1))
-
-    out> 131071
-
-    > sfs.create('/regex1','128K+1B')
-    > print len(sfs.open('regex1/128KB+1B').read(0, 128*1024+1))
-
-    out> 131073
 
 Mounting as a filesystem
 ------------------------

@@ -25,7 +25,19 @@ if DEBUG:
     logging.debug("Starting SizeFS")
 
 
-class SizeFSFuse(LoggingMixIn, Operations):
+class SizeFile(XegerGen):
+    """
+    Size File.
+
+    A Dynamically created file
+
+    """
+
+    def read(self, start, end):
+        return super(SizeFile, self).read(start, end)
+
+
+class SizeFS(LoggingMixIn, Operations):
     """
     Size Filesystem.
 
@@ -201,6 +213,38 @@ class SizeFSFuse(LoggingMixIn, Operations):
 
         self.fd += 1
         return self.fd
+
+    def __create_size_file__(self, path):
+        """
+        Dynamically creates a SizeFile from a path which can then be read
+        """
+        (folder, filename) = os.path.split(path)
+        parsed = FILE_REGEX.search(filename)
+
+        if parsed:
+            size_bytes = self.__calculate_file_size__(parsed)
+            if folder == '' or folder == '/':
+                return SizeFile(size_bytes)
+            elif self.folders and folder != '/':
+                filler = self.xattrs[folder].get(u'user.filler', None)
+                prefix = self.xattrs[folder].get(u'user.prefix', None)
+                suffix = self.xattrs[folder].get(u'user.suffix', None)
+                padder = self.xattrs[folder].get(u'user.padder', None)
+                max_random = self.xattrs[folder].get(u'user.max_random', u'10')
+                size_file = SizeFile(size_bytes,
+                                     filler=filler,
+                                     prefix=prefix,
+                                     suffix=suffix,
+                                     padder=padder,
+                                     max_random=int(max_random))
+                return size_file
+            else:
+                raise ValueError('Could not find folder "%s"' % folder)
+        else:
+            raise ValueError('Could not parse file size "%s"' % filename)
+
+    def get_size_file(self, path):
+        return self.__create_size_file__(path)
 
     def read(self, path, size, offset, fh):
         """
@@ -415,6 +459,6 @@ if __name__ == '__main__':
 
     if DEBUG:
         logging.getLogger().setLevel(logging.DEBUG)
-        fuse = FUSE(SizeFSFuse(), argv[1], foreground=True, auto_cache=True)
+        fuse = FUSE(SizeFS(), argv[1], foreground=True, auto_cache=True)
     else:
-        fuse = FUSE(SizeFSFuse(), argv[1], foreground=False, auto_cache=True)
+        fuse = FUSE(SizeFS(), argv[1], foreground=False, auto_cache=True)
