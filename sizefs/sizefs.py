@@ -19,7 +19,7 @@ FILE_REGEX = re.compile("^(?P<size>[0-9]+(\.[0-9])?)(?P<size_si>[EPTGMKB])"
                         "((?P<operator>[\+|\-])(?P<shift>\d+)"
                         "(?P<shift_si>[EPTGMKB]))?$")
 
-DEBUG = False
+DEBUG = True
 
 if DEBUG:
     logging.debug("Starting SizeFS")
@@ -49,7 +49,6 @@ class SizeFS(LoggingMixIn, Operations):
       open("/<folder>/1.1T-1B")
     """
 
-    #__metaclass__ = LogTheMethods
     default_files = ['100K', '4M', '4M-1B', '4M+1B']
     sizes = {'B': 1, 'K': 1024, 'M': 1024**2, 'G': 1024**3,
              'T': 1024**4, 'P': 1024**5, 'E': 1024**6}
@@ -67,13 +66,13 @@ class SizeFS(LoggingMixIn, Operations):
         # Create the default dirs (zeros, ones, common)
         self.mkdir('/zeros', (S_IFDIR | 0664))
         self.setxattr('/zeros', u'user.filler', '0', None)
-        self.__add_default_files__('/zeros')
+        self._add_default_files('/zeros')
         self.mkdir('/ones', (S_IFDIR | 0664))
         self.setxattr('/ones', u'user.filler', '1', None)
-        self.__add_default_files__('/ones')
+        self._add_default_files('/ones')
         self.mkdir('/alpha_num', (S_IFDIR | 0664))
         self.setxattr('/alpha_num', u'user.filler', '[a-zA-Z0-9]', None)
-        self.__add_default_files__('/alpha_num')
+        self._add_default_files('/alpha_num')
 
     def chmod(self, path, mode):
         """
@@ -98,9 +97,9 @@ class SizeFS(LoggingMixIn, Operations):
         (folder, filename) = os.path.split(path)
 
         if folder in self.folders and not folder == "/":
-            __m__ = FILE_REGEX.match(filename)
-            if __m__:
-                attrs = self.__file_attrs__(__m__)
+            _m = FILE_REGEX.match(filename)
+            if _m:
+                attrs = self._file_attrs(_m)
                 size_bytes = attrs['st_size']
 
                 # Get the inherited xattrs from the containing folder and create
@@ -125,7 +124,7 @@ class SizeFS(LoggingMixIn, Operations):
 
                 self.files[path] = {
                     'attrs': attrs,
-                    'generator': self.__create_generator__(path, size_bytes)
+                    'generator': self._create_generator(path, size_bytes)
                 }
             else:
                 raise FuseOSError(EPERM)
@@ -214,7 +213,7 @@ class SizeFS(LoggingMixIn, Operations):
         self.fd += 1
         return self.fd
 
-    def __create_size_file__(self, path):
+    def _create_size_file(self, path):
         """
         Dynamically creates a SizeFile from a path which can then be read
         """
@@ -222,7 +221,7 @@ class SizeFS(LoggingMixIn, Operations):
         parsed = FILE_REGEX.search(filename)
 
         if parsed:
-            size_bytes = self.__calculate_file_size__(parsed)
+            size_bytes = self._calculate_file_size(parsed)
             if folder == '' or folder == '/':
                 return SizeFile(size_bytes)
             elif self.folders and folder != '/':
@@ -244,7 +243,7 @@ class SizeFS(LoggingMixIn, Operations):
             raise ValueError('Could not parse file size "%s"' % filename)
 
     def get_size_file(self, path):
-        return self.__create_size_file__(path)
+        return self._create_size_file(path)
 
     def read(self, path, size, offset, fh):
         """
@@ -286,7 +285,7 @@ class SizeFS(LoggingMixIn, Operations):
 
         if name in path_xattrs:
             del path_xattrs[name]
-            self.__update_mtime__(path)
+            self._update_mtime(path)
         else:
             raise FuseOSError(ENODATA)
 
@@ -299,7 +298,7 @@ class SizeFS(LoggingMixIn, Operations):
         elif path in self.files:
             size_bytes = self.files[path]['attrs']['st_size']
             self.files[path]['generator'] =\
-                self.__create_generator__(path, size_bytes)
+                self._create_generator(path, size_bytes)
 
     def rename(self, old, new):
         """
@@ -351,7 +350,7 @@ class SizeFS(LoggingMixIn, Operations):
             if name in path_xattrs and value == path_xattrs[name]:
                 return
             else:
-                self.__update_mtime__(path)
+                self._update_mtime(path)
             path_xattrs[name] = value
         else:
             raise FuseOSError(ENOENT)
@@ -366,7 +365,7 @@ class SizeFS(LoggingMixIn, Operations):
         elif path in self.files:
             size_bytes = self.files[path]['attrs']['st_size']
             self.files[path]['generator'] =\
-                self.__create_generator__(path, size_bytes)
+                self._create_generator(path, size_bytes)
 
     def statfs(self, path):
         return dict(f_bsize=512, f_blocks=4096, f_bavail=2048)
@@ -390,7 +389,7 @@ class SizeFS(LoggingMixIn, Operations):
     def write(self, path, data, offset, fh):
         raise FuseOSError(EPERM)
 
-    def __calculate_file_size__(self, regex_match):
+    def _calculate_file_size(self, regex_match):
         file_groupdict = regex_match.groupdict()
         init_size = float(file_groupdict["size"])
         size_unit = self.sizes[file_groupdict["size_si"]]
@@ -411,29 +410,29 @@ class SizeFS(LoggingMixIn, Operations):
         else:
             return int(size)
 
-    def __file_attrs__(self, m):
-        size = self.__calculate_file_size__(m)
+    def _file_attrs(self, m):
+        size = self._calculate_file_size(m)
         return dict(st_mode=(S_IFREG | 0444), st_nlink=1,
                     st_size=size, st_ctime=time(),
                     st_mtime=time(), st_atime=time())
 
-    def __update_mtime__(self, path):
+    def _update_mtime(self, path):
         if path in self.folders:
             self.folders[path]['st_mtime'] = time()
         elif path in self.files:
             self.files[path]['attrs']['st_mtime'] = time()
 
-    def __add_default_files__(self, path):
+    def _add_default_files(self, path):
         """
         Add a set of example files to a directory (only for demo dirs)
         """
         for default_file in self.default_files:
             new_filepath = os.path.join(path, default_file)
             self.create(new_filepath, 0444)
-            #attr = self.__file_attrs__(FILE_REGEX.match(default_file))
+            #attr = self._file_attrs(FILE_REGEX.match(default_file))
             #self.files.setdefault(new_filepath, {"attrs": attr})
 
-    def __create_generator__(self, path, size_bytes):
+    def _create_generator(self, path, size_bytes):
         """
         Create a generator from xattr values
         """
@@ -459,6 +458,6 @@ if __name__ == '__main__':
 
     if DEBUG:
         logging.getLogger().setLevel(logging.DEBUG)
-        fuse = FUSE(SizeFS(), argv[1], foreground=True, auto_cache=True)
+        fuse = FUSE(SizeFS(), argv[1], nolocalcaches=True, cache=False, foreground=True)
     else:
-        fuse = FUSE(SizeFS(), argv[1], foreground=False, auto_cache=True)
+        fuse = FUSE(SizeFS(), argv[1], nolocalcaches=True, cache=False, foreground=False)
